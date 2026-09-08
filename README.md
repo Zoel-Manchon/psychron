@@ -1,5 +1,12 @@
 # psychron
 
+[![License: MIT](https://img.shields.io/github/license/Zoel-Manchon/psychron?color=2ea44f)](LICENSE)
+[![ESP32 WROOM-32](https://img.shields.io/badge/ESP32-WROOM--32-E7352C?logo=espressif&logoColor=white)](firmware/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](backend/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)](frontend/)
+[![MQTT 5 over mTLS](https://img.shields.io/badge/MQTT%205-mTLS-660066?logo=eclipsemosquitto&logoColor=white)](#security)
+[![Tests: 82](https://img.shields.io/badge/tests-82-2563EB)](#verifying)
+
 An ESP32 measures a room, signs its own telemetry with a client certificate, and a Python service turns it into a record that survives outages, reboots and a device with no working clock.
 
 
