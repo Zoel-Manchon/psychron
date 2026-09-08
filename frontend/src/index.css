@@ -1,0 +1,202 @@
+/* Instrument face.
+ *
+ * Ink on paper, hairlines instead of boxes, monospaced numerals everywhere a
+ * number can change so digits never shift under the eye. One oxide red for the
+ * live value and one plan-drawing cyan for humidity — no green for good and no
+ * amber for warning, because state is carried by shape, position and words.
+ *
+ * Light is the default and dark is a choice, not an inherited preference: the
+ * panel is read beside the bench it measures. The toggle writes data-theme on
+ * the root, so both directions are explicit and nothing depends on the host.
+ *
+ * Fonts are bundled rather than fetched: the whole system runs on a LAN behind
+ * a private CA, and a dashboard that needs the public internet to render its
+ * own typography is a dashboard that breaks when the link does.
+ */
+
+@import "@fontsource/archivo/400.css";
+@import "@fontsource/archivo/500.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+:root {
+  --paper: #f4f1ea;
+  --panel: #faf8f4;
+  --ink: #16140f;
+  --ink-2: rgba(22, 20, 15, 0.6);
+  --ink-3: rgba(22, 20, 15, 0.38);
+  --rule: rgba(22, 20, 15, 0.2);
+  --rule-faint: rgba(22, 20, 15, 0.1);
+  --fill: rgba(22, 20, 15, 0.06);
+  --accent: #b23a18;
+  --cyan: #3f7683;
+
+  --grot: Archivo, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  /* Graphite with no blue cast: still a printed face, inverted. */
+  --paper: #131317;
+  --panel: #1a1a1f;
+  --ink: #ece7dd;
+  --ink-2: rgba(236, 231, 221, 0.6);
+  --ink-3: rgba(236, 231, 221, 0.38);
+  --rule: rgba(236, 231, 221, 0.22);
+  --rule-faint: rgba(236, 231, 221, 0.12);
+  --fill: rgba(236, 231, 221, 0.08);
+  --accent: #d4623a;
+  --cyan: #7aa8b4;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--grot);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── page ────────────────────────────────────────────────────────────────── */
+
+.sheet { max-width: 1420px; margin: 0 auto; padding: 20px 26px 64px; }
+
+/* Everything lives on one page, so the bands do the work that navigation used
+   to: a hairline and a band label say where one subject ends and the next
+   begins, without hiding either of them behind a click. */
+.band {
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+  margin-top: 22px;
+}
+.band-first { border-top: 0; margin-top: 16px; padding-top: 0; }
+
+.grid { display: grid; gap: 26px; }
+@media (min-width: 1080px) {
+  .g-hero { grid-template-columns: 0.95fr 0.95fr 1fr 1.05fr; }
+  .g-3 { grid-template-columns: 1.05fr 1.25fr 1fr; }
+  .g-2 { grid-template-columns: 1.3fr 1fr; }
+}
+@media (min-width: 700px) and (max-width: 1079px) {
+  .g-hero, .g-3, .g-2 { grid-template-columns: 1fr 1fr; }
+}
+
+/* Columns are told apart by a hairline in the gutter, not by a card. */
+@media (min-width: 700px) {
+  .grid > * + * { border-left: 1px solid var(--rule-faint); padding-left: 26px; }
+}
+
+/* The access screens are genuinely one small sheet rather than a dense panel,
+   and they set their own width inline. Their two-column split gets no divider:
+   a form and its requirements are one thought, not two subjects. */
+.sheet-narrow { padding-top: 40px; }
+/* The theme control on the screens that have no masthead to hold it. */
+.corner { position: fixed; top: 16px; right: 22px; z-index: 2; }
+.cols { display: grid; gap: 34px; }
+@media (min-width: 900px) { .cols-2 { grid-template-columns: 1.4fr 1fr; } }
+
+.stack { display: flex; flex-direction: column; gap: 4px; }
+.row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+
+/* ── type ────────────────────────────────────────────────────────────────── */
+
+.label {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 4px;
+  margin-bottom: 12px;
+  display: block;
+}
+.label-plain { border-bottom: 0; padding-bottom: 0; margin-bottom: 4px; }
+
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.mono-note { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.dim { color: var(--ink-3); }
+.accent { color: var(--accent); }
+.cyan { color: var(--cyan); }
+
+h1 { font-family: var(--mono); font-size: 21px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+
+/* Measured values lead; derived ones are set smaller and greyer so no legend
+   has to explain which is which. */
+.reading-primary { font-family: var(--mono); font-size: 68px; line-height: 0.9; font-weight: 500; }
+.reading-secondary { font-family: var(--mono); font-size: 52px; line-height: 0.9; font-weight: 400; }
+.unit { font-family: var(--grot); font-size: 14px; color: var(--ink-2); margin-left: 6px; }
+
+.rule { border: 0; border-top: 1px solid var(--rule); margin: 20px 0 14px; }
+.rule-faint { border: 0; border-top: 1px solid var(--rule-faint); margin: 12px 0; }
+
+table { border-collapse: collapse; width: 100%; }
+td { padding: 5px 0; border-bottom: 1px solid var(--rule-faint); font-size: 13px; }
+td.v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.derived td:first-child { color: var(--ink-2); }
+
+.revision { display: grid; grid-template-columns: auto 1fr; gap: 3px 16px; font-size: 11px; align-items: baseline; }
+.revision dt { color: var(--ink-3); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.revision dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+
+/* ── controls ────────────────────────────────────────────────────────────── */
+
+button {
+  font-family: var(--grot);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 9px;
+  cursor: pointer;
+}
+button:hover { color: var(--ink); border-bottom-color: var(--ink-2); }
+button[aria-pressed="true"] { color: var(--ink); border-bottom: 2px solid var(--accent); }
+
+input {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  padding: 6px 2px;
+  width: 100%;
+}
+input:focus { outline: none; border-bottom: 1px solid var(--accent); }
+
+/* ── status ──────────────────────────────────────────────────────────────── */
+
+.status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.pip { width: 7px; height: 7px; border: 1px solid var(--ink-2); display: inline-block; }
+.pip-on { background: var(--accent); border-color: var(--accent); }
+
+/* ── distribution ────────────────────────────────────────────────────────── */
+
+.dist + .dist { margin-top: 16px; }
+.dist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.dist-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+.dist-span { font-size: 12px; }
+.dist-foot { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+
+/* A completeness bar reads faster than a percentage, and the percentage stays
+   beside it because a bar alone cannot be quoted. */
+.meter { height: 6px; background: var(--fill); border: 1px solid var(--rule-faint); }
+.meter > span { display: block; height: 100%; background: var(--ink-2); }
+
+/* uPlot draws its own furniture; these bring it onto the same page. */
+.uplot, .u-wrap { font-family: var(--mono) !important; }
+.u-legend { font-family: var(--mono) !important; font-size: 11px !important; color: var(--ink-2); }
+.u-legend .u-marker { border-width: 2px !important; }
+.u-select { background: var(--fill) !important; }

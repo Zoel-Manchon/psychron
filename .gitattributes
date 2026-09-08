@@ -1,0 +1,10 @@
+# Line endings are not cosmetic here. A shell script checked out with CRLF fails
+# on Linux with "bash: \r: command not found", which points at nothing, and the
+# firmware and SQL are read by tools that are equally unforgiving.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.gif binary
+*.mp4 binary
+*.woff binary
+*.woff2 binary

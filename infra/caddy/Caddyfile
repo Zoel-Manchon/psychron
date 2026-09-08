@@ -1,0 +1,57 @@
+# The web edge: TLS termination, security headers, and one origin for the
+# dashboard and the API it calls.
+#
+# Serving both from the same origin is not cosmetic. It removes CORS from the
+# picture entirely — no preflight, no allowlist to keep in step with whichever
+# port Vite chose today, and no header that has to be permissive enough to work
+# yet narrow enough to be safe. A browser policy you do not need is a browser
+# policy that cannot be misconfigured.
+
+{
+	admin off
+	auto_https off
+}
+
+# A bare address rather than named hosts. A client connecting to an IP sends
+# no SNI, and with named site addresses Caddy has no name to match against, so
+# it cannot choose a certificate and aborts the handshake with an internal
+# error that says nothing about the cause. This block answers on any name.
+:8444 {
+	tls /certs/web.crt /certs/web.key
+
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		# The API is only ever reached from this origin's own page, so nothing
+		# needs to be embedded, framed, or loaded from elsewhere. 'self' covers
+		# the WebSocket too — CSP matches it against the document's origin, so
+		# naming a host here would only pin the policy to one deployment.
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Cross-Origin-Opener-Policy "same-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()"
+		# Deliberately no HSTS. This certificate comes from a private CA on a LAN
+		# address; pinning the browser to HTTPS for an IP it may later meet on a
+		# different network is a promise this deployment cannot keep.
+		-Server
+	}
+
+	# The API keeps its own /api prefix, so no path rewriting and no chance of a
+	# route silently changing shape between the two sides.
+	handle /api/* {
+		# A service on the same compose network, reached by name. Its port is
+		# never published, so this is the only route to it.
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
+}

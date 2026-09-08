@@ -1,0 +1,41 @@
+# Secrets and generated credentials
+infra/.env
+infra/mosquitto/config/passwd
+infra/certs/
+*.pem
+*.key
+*.crt
+
+# Firmware secrets — the node's credentials live in NVS, never in the tree
+firmware/**/secrets.h
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+
+# Database dumps
+infra/backups/
+
+# OTA images and their manifest: build outputs, and a 1 MB binary per release
+# is not what a git history is for.
+infra/firmware/*.bin
+infra/firmware/manifest.json
+
+# Superseded PKI, kept on disk while the old certificates are still trusted
+# anywhere. Its keys match *.key above, but the directory should never appear.
+infra/certs.old-*/

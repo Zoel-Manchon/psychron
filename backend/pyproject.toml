@@ -1,0 +1,41 @@
+[project]
+name = "psychron"
+version = "0.1.0"
+description = "Ingestion and API for the psychron environmental node"
+requires-python = ">=3.11"
+dependencies = [
+    "paho-mqtt>=2.1",
+    "psycopg[binary]>=3.2",
+    # The API serves concurrent requests; one shared connection cannot.
+    "psycopg-pool>=3.2",
+    # Provisioning talks to the node over the cable, not the broker.
+    "pyserial>=3.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    # Excel export; CSV and JSON need no dependency.
+    "openpyxl>=3.1",
+    # Local identity provider: the default the Authenticator port
+    # resolves to until Aegis is wired in.
+    "argon2-cffi>=23.1",
+    "pyotp>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+psychron = "psychron.cli:main"
+psychron-provision = "psychron.provision:main"
+psychron-release = "psychron.release:main"
+psychron-admin = "psychron.admin:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

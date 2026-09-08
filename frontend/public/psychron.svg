@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Psychron">
+  <!-- Psi: psychrometry, and the first letter of the name. A glyph rather than a
+       picture of a thermometer, because at sixteen pixels a thermometer is a
+       smudge and a letterform is still a letterform. -->
+  <rect width="32" height="32" rx="6" fill="#16140f"/>
+  <g fill="none" stroke="#f4f1ea" stroke-width="2.4" stroke-linecap="round">
+    <path d="M9 10 V15 C9 21.5 23 21.5 23 15 V10"/>
+    <path d="M16 7 V25.5"/>
+  </g>
+</svg>

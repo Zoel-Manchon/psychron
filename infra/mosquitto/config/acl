@@ -1,0 +1,13 @@
+# A node may publish its own readings and nothing else. It cannot subscribe at all,
+# and it cannot publish under another device's topic — the broker enforces the
+# device boundary so ingestion never has to trust the topic string.
+#
+# Identity still comes from the certificate SAN once mTLS is in place; this ACL is
+# the coarse fence, not the identity check.
+
+user esp32-01
+topic write psychron/v1/esp32-01/#
+
+# The ingestion service reads everything and writes nothing.
+user ingest
+topic read psychron/v1/#
