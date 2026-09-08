@@ -19,7 +19,7 @@ axis, rather than smoothed into a straight line that would look like a calm room
 | **Size** | ~6,500 lines across firmware, backend, frontend, schema and infrastructure · 82 tests |
 | **How to run it** | `cd infra && ./bootstrap.sh && ./make-certs.sh && docker compose up -d` |
 
-[Topology](#topology) · [Architecture](#architecture) · [Why the timestamps are hard](#why-the-timestamps-are-hard) · [Security](#security) · [The record](#the-record) · [The panel](#the-panel) · [Running it](#running-it) · [Verifying](#verifying) · [Layout](#layout) · [Status](#status)
+[Topology](#topology) · [Architecture](#architecture) · [Why the timestamps are hard](#why-the-timestamps-are-hard) · [Security](#security) · [The record](#the-record) · [The panel](#the-panel) · [Running it](#running-it) · [Verifying](#verifying) · [Layout](#layout) · [Status](#status) · [Licence](#licence)
 
 ## Topology
 
@@ -274,3 +274,9 @@ Open, honestly:
 - **Lockout is per identifier, not per origin.** A distributed attempt against many identifiers is not slowed down.
 - **No flash encryption.** It requires the second-stage bootloader to do the encrypting, which the Arduino bootloader does not; moving the build to ESP-IDF is the prerequisite.
 - **No tests at the API layer.** The domain and the payload builder are covered; the routes are not.
+
+## Licence
+
+[MIT](LICENSE). The certificates, credentials and device identity are generated
+locally and are not part of it — see `infra/make-certs.sh` and the notes in
+`.gitignore` for what never leaves the machine.
