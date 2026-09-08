@@ -2,12 +2,8 @@
 
 An ESP32 measures a room, signs its own telemetry with a client certificate, and a Python service turns it into a record that survives outages, reboots and a device with no working clock.
 
-![A hand cupped over the sensor: relative humidity climbs from 58 % to 81 % while the panel follows it live](docs/media/demo.gif)
 
-A hand cupped over the DHT22, and the panel follows it live. To the left of the
-spike, a stretch where no reading exists is drawn as a gap and marked on the time
-axis, rather than smoothed into a straight line that would look like a calm room.
-**[Full 60-second walkthrough →](docs/media/psychron_demo.mp4)**
+https://github.com/user-attachments/assets/7cd61433-e8dd-42be-8adb-ff7d193a1d83
 
 ## At a glance
 
