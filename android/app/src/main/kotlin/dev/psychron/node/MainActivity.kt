@@ -32,6 +32,7 @@ class MainActivity : Activity() {
     private lateinit var pip: View
     private lateinit var status: TextView
     private lateinit var counters: TextView
+    private lateinit var clockLine: TextView
     private lateinit var provisioning: TextView
     private lateinit var toggle: TextView
     private lateinit var windowInfo: TextView
@@ -81,6 +82,8 @@ class MainActivity : Activity() {
         column.addView(statusRow)
         counters = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(4), 0, 0) }
         column.addView(counters)
+        clockLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
+        column.addView(clockLine)
 
         // A bordered control rather than a filled slab: the action matters, but
         // it is not the most important thing on a screen full of measurements.
@@ -225,6 +228,9 @@ class MainActivity : Activity() {
         status.setTextColor(if (s.running && !connected) Ink.accent else Ink.ink)
         counters.text = "sent ${s.sent} · replayed ${s.replayed} · queued ${s.queued} · dropped ${s.dropped}" +
             if (s.running && !s.microphone) " · microphone not granted" else ""
+
+        clockLine.text = if (s.running) "time · ${s.clock}" else ""
+        clockLine.setTextColor(if (s.clock.startsWith("NTP")) Ink.ink3 else Ink.accent)
 
         toggle.text = when {
             missing.isNotEmpty() -> "PROVISION FIRST"

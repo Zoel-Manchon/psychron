@@ -31,6 +31,7 @@ Published to `psychron/v2/<device_id>/sample` once per window.
   "boot":  3141592653,
   "seq":   42,
   "ts":    1789012345,
+  "ms":    437,
   "up":    84000,
   "win":   2000,
   "q":     0,
@@ -50,6 +51,7 @@ Published to `psychron/v2/<device_id>/sample` once per window.
 |---|---|---|
 | `v` | int | `2`. |
 | `dev`, `fw`, `boot`, `seq`, `ts`, `q` | | As in v1. |
+| `ms` | int, optional | Milliseconds within the `ts` second, 0–999, as in v1's revision. Only with a non-null `ts`. |
 | `up` | int | Milliseconds since `boot` was drawn. **Widened to 2⁵³−1** — v1's 32 bits wrap after 49.7 days, which is an ESP32 limit, not a law. |
 | `win` | int | Length of the window this message summarises, 100–60000 ms. `ts` and `up` mark its **end**. |
 

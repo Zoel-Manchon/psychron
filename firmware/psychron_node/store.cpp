@@ -12,13 +12,18 @@ struct Header {
   uint32_t count;
 };
 
-const uint32_t MAGIC = 0x50535131;   // "PSQ1"
+// "PSQ2". Bumped with the record layout: a ring written in the 28-byte format and
+// read as 32-byte records would replay garbage whose CRCs happen to be checked
+// against the wrong span. A new magic makes begin() recreate the file instead. The
+// cost is any backlog buffered at the moment of the update, and an update arrives
+// over the network, which means the link — and so the backlog — was up and empty.
+const uint32_t MAGIC = 0x50535132;
 
 Header   hdr     = {MAGIC, 0, 0, 0};
 bool     mounted = false;
 uint32_t evicted = 0;
 
-static_assert(sizeof(StoreRecord) == 28, "record layout must stay fixed on disk");
+static_assert(sizeof(StoreRecord) == 32, "record layout must stay fixed on disk");
 
 uint16_t crc16(const uint8_t *data, size_t n) {
   uint16_t crc = 0xFFFF;

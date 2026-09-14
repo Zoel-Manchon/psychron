@@ -12,6 +12,8 @@ struct StoreRecord {
   uint32_t seq;
   uint32_t uptime_ms;
   int32_t  ts;              // epoch seconds; 0 means the clock was not synced
+  uint16_t ts_ms;           // milliseconds within ts, 0-999; meaningless when ts is 0
+  uint16_t reserved;        // keeps the floats on a 4-byte boundary with no padding
   float    temperature_c;
   float    humidity_pct;
   uint16_t quality;

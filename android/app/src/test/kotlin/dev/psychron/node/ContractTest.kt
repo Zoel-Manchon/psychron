@@ -40,6 +40,24 @@ class ContractTest {
     }
 
     @Test
+    fun `milliseconds follow the second they belong to`() {
+        val json = Contract.encode(env.copy(tsMillis = 437), full)!!
+        assertTrue(json.contains("\"ts\":1789012345,\"ms\":437,\"up\""))
+    }
+
+    @Test
+    fun `milliseconds are never sent without a clock`() {
+        val json = Contract.encode(env.copy(tsSeconds = null, tsMillis = 437), full)!!
+        assertFalse(json.contains("\"ms\""))
+    }
+
+    @Test
+    fun `an out-of-range millisecond is dropped, not sent`() {
+        assertFalse(Contract.encode(env.copy(tsMillis = 1000), full)!!.contains("\"ms\""))
+        assertTrue(Contract.encode(env.copy(tsMillis = 0), full)!!.contains("\"ms\":0"))
+    }
+
+    @Test
     fun `an unknown clock is written as null, not zero`() {
         val json = Contract.encode(env.copy(tsSeconds = null), full)!!
         assertTrue(json.contains("\"ts\":null"))

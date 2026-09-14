@@ -1,3 +1,4 @@
+#include "esp_sntp.h"
 #include "netlink.h"
 #include "config.h"
 
@@ -37,6 +38,10 @@ void buildTopics() {
 }
 
 void startNtp() {
+  // Every 15 minutes rather than the default hour. The crystal drifts by up to
+  // ~20 ppm, which is 72 ms an hour; millisecond timestamps are only worth sending
+  // if the clock behind them is corrected more often than it drifts that far.
+  esp_sntp_set_sync_interval(15UL * 60UL * 1000UL);
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
   ntpStarted = true;
   lastNtpSync = millis();

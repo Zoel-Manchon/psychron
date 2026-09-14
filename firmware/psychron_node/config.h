@@ -11,7 +11,7 @@
   #error "secrets.h is missing: copy secrets.h.example to secrets.h and fill it in"
 #endif
 
-#define FW_VERSION        "1.0.1"
+#define FW_VERSION        "1.1.0"
 #define CONTRACT_VERSION  1
 
 // ── Wiring ───────────────────────────────────────────────────────────────────

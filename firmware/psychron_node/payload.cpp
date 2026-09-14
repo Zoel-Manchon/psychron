@@ -46,8 +46,15 @@ size_t buildReadingPayload(char *buf, size_t n, const NodeIdentity &id,
          id.contract_version, id.device_id, id.firmware,
          (unsigned)r.boot, (unsigned)r.seq);
 
-  if (r.ts > 0) c.addf(",\"ts\":%ld", (long)r.ts);
-  else          c.addf(",\"ts\":null");
+  if (r.ts > 0) {
+    c.addf(",\"ts\":%ld", (long)r.ts);
+    // Only a millisecond that can be one. A record read back from flash has
+    // passed its CRC, but an out-of-range value would get the whole reading
+    // rejected; omitting the field still leaves it correct to the second.
+    if (r.ts_ms <= 999) c.addf(",\"ms\":%u", (unsigned)r.ts_ms);
+  } else {
+    c.addf(",\"ts\":null");
+  }
 
   c.addf(",\"up\":%u", (unsigned)r.uptime_ms);
   c.addOptFloat("t", r.temperature_c);

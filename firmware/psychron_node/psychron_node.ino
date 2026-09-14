@@ -13,6 +13,7 @@
  * Copy secrets.h.example to secrets.h before building.
  */
 
+#include <sys/time.h>
 #include "config.h"
 #include "certstore.h"
 #include "netlink.h"
@@ -166,7 +167,13 @@ void loop() {
   rec.quality   = r.quality;
 
   if (netlink::clockSynced()) {
-    rec.ts = (int32_t)time(nullptr);
+    // gettimeofday rather than time(): the clock is kept to the microsecond by
+    // SNTP, and throwing the fraction away made every reading up to a second
+    // early, which is coarser than the difference being measured between nodes.
+    timeval tv;
+    gettimeofday(&tv, nullptr);
+    rec.ts    = (int32_t)tv.tv_sec;
+    rec.ts_ms = (uint16_t)(tv.tv_usec / 1000);
   } else {
     rec.ts = 0;
     rec.quality |= Q_CLOCK_UNSYNCED;

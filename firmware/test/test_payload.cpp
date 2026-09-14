@@ -51,6 +51,7 @@ static StoreRecord sample() {
   r.seq = 1234;
   r.uptime_ms = 2468000;
   r.ts = 1789012345;
+  r.ts_ms = 437;
   r.temperature_c = 23.42f;
   r.humidity_pct = 51.20f;
   r.quality = 0;
@@ -70,7 +71,7 @@ int main() {
     check(contains(buf, "\"dev\":\"esp32-01\""), "carries the device id");
     check(contains(buf, "\"boot\":2748109371"), "carries the boot id");
     check(contains(buf, "\"seq\":1234"), "carries the sequence");
-    check(contains(buf, "\"ts\":1789012345"), "carries the device clock");
+    check(contains(buf, "\"ts\":1789012345,\"ms\":437"), "carries the device clock to the millisecond");
     check(contains(buf, "\"up\":2468000"), "carries uptime");
     check(contains(buf, "\"t\":23.42"), "temperature to two decimals");
     check(contains(buf, "\"h\":51.20"), "humidity to two decimals");
@@ -83,6 +84,7 @@ int main() {
     buildReadingPayload(buf, sizeof(buf), ID, r);
     check(contains(buf, "\"ts\":null"), "unsynced clock emits null");
     check(!contains(buf, "\"ts\":0"), "and never emits epoch zero");
+    check(!contains(buf, "\"ms\""), "and no milliseconds of an unknown second");
   }
   {
     StoreRecord r = sample();
@@ -93,6 +95,22 @@ int main() {
     check(contains(buf, "\"h\":null"), "failed read emits null humidity");
     check(!contains(buf, "nan"), "never leaks a printf nan into the wire format");
     check(wellFormed(buf), "still well formed with nulls", buf);
+  }
+
+  printf("\nmilliseconds:\n");
+  {
+    StoreRecord r = sample();
+    r.ts_ms = 0;
+    buildReadingPayload(buf, sizeof(buf), ID, r);
+    check(contains(buf, "\"ms\":0,"), "the first millisecond of a second is still sent");
+    r.ts_ms = 999;
+    buildReadingPayload(buf, sizeof(buf), ID, r);
+    check(contains(buf, "\"ms\":999,"), "and the last");
+    r.ts_ms = 1000;
+    buildReadingPayload(buf, sizeof(buf), ID, r);
+    check(!contains(buf, "\"ms\""), "an impossible millisecond is omitted, not sent");
+    check(contains(buf, "\"ts\":1789012345,\"up\""), "leaving the reading correct to the second");
+    check(wellFormed(buf), "and well formed", buf);
   }
 
   printf("\nquality flags survive:\n");

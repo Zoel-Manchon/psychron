@@ -41,6 +41,11 @@ object Contract {
         val uptimeMs: Long,
         val windowMs: Int,
         val quality: Int,
+        /**
+         * Milliseconds within that second, 0–999. Sent only alongside `ts`. Last and
+         * defaulted, so every existing positional construction keeps its meaning.
+         */
+        val tsMillis: Int? = null,
     )
 
     private class Field(val name: String, val value: Double?, val lo: Double, val hi: Double,
@@ -104,6 +109,11 @@ object Contract {
             append(",\"boot\":").append(e.boot)
             append(",\"seq\":").append(e.seq)
             append(",\"ts\":").append(e.tsSeconds?.toString() ?: "null")
+            // Milliseconds only with a clock to belong to: the contract rejects them
+            // on their own, and an out-of-range value is dropped rather than sent.
+            if (e.tsSeconds != null && e.tsMillis != null && e.tsMillis in 0..999) {
+                append(",\"ms\":").append(e.tsMillis)
+            }
             append(",\"up\":").append(e.uptimeMs)
             append(",\"win\":").append(e.windowMs)
             append(",\"q\":").append(e.quality)

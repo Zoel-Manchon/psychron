@@ -28,6 +28,10 @@ class NodeService : Service() {
     private var link: MqttLink? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    private val clock = TrustedClock { SystemClock.elapsedRealtime() }
+    @Volatile private var clockThreadRunning = false
+    private var clockThread: Thread? = null
+
     private lateinit var config: NodeConfig
     private var boot = 0L
     private var seq = 0L
@@ -67,6 +71,7 @@ class NodeService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "psychron:node")
             .apply { acquire() }
 
+        startClock()
         link = MqttLink(this, config, WINDOW_MS).apply { start() }
         window.start()
         sound.start()
@@ -84,7 +89,10 @@ class NodeService : Service() {
     private fun flush() {
         val summary = window.take(sound.drain())
         seq += 1
-        val now = System.currentTimeMillis()
+        // NTP time carried by the monotonic clock once any server has answered; the
+        // system clock only until then. The ESP32 and the server both run NTP, and a
+        // node stamping with the phone's network-set clock was half a second out.
+        val now = clock.nowMillis() ?: System.currentTimeMillis()
         val envelope = Contract.Envelope(
             device = config.device,
             firmware = FIRMWARE,
@@ -94,6 +102,7 @@ class NodeService : Service() {
             // checks it against arrival and falls back to the boot anchor when it
             // disagrees; the node does not get to decide its own clock is right.
             tsSeconds = now / 1000,
+            tsMillis = (now % 1000).toInt(),
             uptimeMs = SystemClock.elapsedRealtime() - bootElapsed,
             windowMs = WINDOW_MS,
             quality = 0,
@@ -102,12 +111,41 @@ class NodeService : Service() {
         NodeBus.update { it.copy(latest = summary) }
     }
 
+    private fun startClock() {
+        clockThreadRunning = true
+        clockThread = Thread({
+            while (clockThreadRunning) {
+                if (clock.synchronise(NTP_SERVERS)) {
+                    val ntp = clock.nowMillis()!!
+                    val ahead = System.currentTimeMillis() - ntp
+                    val phone = when {
+                        ahead > 0 -> "phone clock ${ahead} ms ahead"
+                        ahead < 0 -> "phone clock ${-ahead} ms behind"
+                        else -> "phone clock exact"
+                    }
+                    NodeBus.update {
+                        it.copy(clock = "NTP ${clock.server} · ±${clock.uncertaintyMillis()} ms · $phone")
+                    }
+                } else if (clock.anchor == null) {
+                    NodeBus.update { it.copy(clock = "system clock · no NTP server answered") }
+                }
+                // Every 15 minutes, like the ESP32: the phone's crystal drifts by tens
+                // of milliseconds an hour, so the anchor is renewed well before that.
+                // A failed attempt retries sooner.
+                val wait = if (clock.anchor == null) 30_000L else 15 * 60_000L
+                try { Thread.sleep(wait) } catch (_: InterruptedException) { return@Thread }
+            }
+        }, "psychron-ntp").apply { isDaemon = true; start() }
+    }
+
     override fun onDestroy() {
         // Guarded: if start failed half way, some of these were never created, and
         // a crash in onDestroy would hide the reason start failed.
         if (::handler.isInitialized) handler.removeCallbacks(tick)
         if (::window.isInitialized) window.stop()
         if (::sound.isInitialized) sound.stop()
+        clockThreadRunning = false
+        clockThread?.interrupt()
         link?.stop()
         link = null
         if (::thread.isInitialized) thread.quitSafely()
@@ -141,7 +179,10 @@ class NodeService : Service() {
 
     companion object {
         const val WINDOW_MS = 2000
-        const val FIRMWARE = "android-0.1.0"
+        const val FIRMWARE = "android-0.3.0"
+        // The same pool family the ESP32 and the Windows host use, so all three
+        // nodes of the system are corrected against one standard.
+        private val NTP_SERVERS = listOf("es.pool.ntp.org", "pool.ntp.org", "time.cloudflare.com")
         private const val CHANNEL = "node"
         private const val NOTIFICATION_ID = 1
     }

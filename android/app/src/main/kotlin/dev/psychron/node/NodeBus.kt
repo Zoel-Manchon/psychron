@@ -23,6 +23,8 @@ object NodeBus {
         val dropped: Long = 0,
         val queued: Int = 0,
         val lastJson: String? = null,
+        /** Where window timestamps come from, and how far the phone's own clock is off. */
+        val clock: String = "system clock · NTP pending",
     )
 
     @Volatile var state = State()

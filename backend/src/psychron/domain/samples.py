@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 
-from .telemetry import BootAnchors, InvalidMessage, resolve_instant
+from .telemetry import BootAnchors, InvalidMessage, parse_device_clock, resolve_instant
 
 CONTRACT_VERSION = 2
 
@@ -42,7 +42,7 @@ SCHEMA: dict[str, dict[str, tuple[str, float, float, bool]]] = {
     "batt":  {"c":         ("battery_temp_c",  -40.0, 100.0,    True)},
 }
 
-ENVELOPE = {"v", "dev", "fw", "boot", "seq", "ts", "up", "win", "q"}
+ENVELOPE = {"v", "dev", "fw", "boot", "seq", "ts", "ms", "up", "win", "q"}
 
 
 @dataclass(frozen=True)
@@ -141,14 +141,7 @@ def parse(payload: bytes) -> SampleMessage:
     firmware = data.get("fw")
     _require(isinstance(firmware, str) and 0 < len(firmware) <= 32, "fw must be a short string")
 
-    ts_raw = data.get("ts")
-    if ts_raw is None:
-        device_time = None
-    else:
-        _require(isinstance(ts_raw, int) and not isinstance(ts_raw, bool),
-                 "ts must be an integer or null")
-        _require(0 < ts_raw < 4102444800, "ts outside a plausible epoch range")
-        device_time = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+    device_time = parse_device_clock(data)
 
     # A closed schema, top to bottom. An unrecognised key is rejected rather than
     # ignored: a misspelt group would otherwise record a month of nothing under a

@@ -93,6 +93,40 @@ def _int_field(data: dict, key: str, lo: int, hi: int) -> int:
     return int(raw)  # type: ignore[arg-type]
 
 
+def parse_device_clock(data: dict) -> datetime | None:
+    """The device's claimed instant: `ts` seconds plus the optional `ms` within them.
+
+    Shared by every contract version, like the resolution rule below, so the two
+    cannot come to disagree about what a device said the time was.
+
+    `ms` was added after both contracts were in use. Integer seconds cap how well
+    two nodes can be compared at all: each claim could be up to a second early, so
+    nothing finer than that could be said about whether two readings coincided.
+    It is a separate field rather than a change to `ts`, because a field must never
+    change meaning under a version number that already has data behind it, and a
+    message without it is still valid — it is simply known to the second.
+    """
+    ts_raw = data.get("ts")
+    ms_raw = data.get("ms")
+    if ts_raw is None:
+        # Milliseconds of a second nobody knows are not a partial clock; they are
+        # a sign the device's clock logic is broken, and worth rejecting loudly.
+        _require(ms_raw is None, "ms without ts")
+        return None
+
+    _require(isinstance(ts_raw, int) and not isinstance(ts_raw, bool), "ts must be an integer or null")
+    _require(0 < ts_raw < 4102444800, "ts outside a plausible epoch range")  # < year 2100
+
+    ms = 0
+    if ms_raw is not None:
+        _require(isinstance(ms_raw, int) and not isinstance(ms_raw, bool), "ms must be an integer")
+        _require(0 <= ms_raw <= 999, "ms out of range")
+        ms = ms_raw
+    # Integer arithmetic on both parts: a float epoch such as ts + ms / 1000 would
+    # round a microsecond or two, which is exactly the precision being added.
+    return datetime.fromtimestamp(ts_raw, tz=timezone.utc) + timedelta(milliseconds=ms)
+
+
 def parse(payload: bytes) -> TelemetryMessage:
     """Turn a raw MQTT payload into a message, or say why it cannot be one."""
     try:
@@ -111,13 +145,7 @@ def parse(payload: bytes) -> TelemetryMessage:
     firmware = data.get("fw")
     _require(isinstance(firmware, str) and 0 < len(firmware) <= 32, "fw must be a short string")
 
-    ts_raw = data.get("ts")
-    if ts_raw is None:
-        device_time = None
-    else:
-        _require(isinstance(ts_raw, int) and not isinstance(ts_raw, bool), "ts must be an integer or null")
-        _require(0 < ts_raw < 4102444800, "ts outside a plausible epoch range")  # < year 2100
-        device_time = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+    device_time = parse_device_clock(data)
 
     return TelemetryMessage(
         version=version,

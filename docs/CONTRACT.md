@@ -37,6 +37,7 @@ than the bytes.
 | `boot` | uint32 | Random id drawn once at startup. |
 | `seq` | uint32 | Monotonic counter within a boot, from 1. |
 | `ts` | int \| null | Device wall clock, epoch seconds. **Null when NTP has not synced.** |
+| `ms` | int, optional | Milliseconds within the `ts` second, 0–999. Only with a non-null `ts`. See the revision below. |
 | `up` | uint32 | Milliseconds since boot. Always valid. |
 | `t` | float \| null | Temperature, °C. Null on a failed read. |
 | `h` | float \| null | Relative humidity, %. Null on a failed read. |
@@ -60,6 +61,20 @@ restarts at 1 after every reboot, so gap detection would see a reboot as a 1200-
 loss and a duplicate as legitimate. `(dev, boot, seq)` is unique for the life of the
 system, which makes ingestion idempotent: a redelivered MQTT message is recognised and
 dropped rather than double-counted.
+
+## Revision · sub-second clock (`ms`)
+
+Added after v1 was in use, as an optional field rather than a change to `ts`.
+
+Integer seconds put a floor under how well two nodes can be compared: each claim
+may be up to a second early, so two readings a quarter of a second apart were
+indistinguishable, and nothing finer than a second could be said about whether the
+ESP32 and the phone saw the same moment. `ms` removes that floor.
+
+It is a separate field because a field must never change meaning under a version
+number that already has data behind it. A message without `ms` remains valid and
+is known to the second, which is exactly what it always claimed. `ms` without `ts`
+is rejected: milliseconds of an unknown second are a broken clock, not a partial one.
 
 ## Quality bitfield
 
