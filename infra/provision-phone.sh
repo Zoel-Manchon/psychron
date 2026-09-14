@@ -16,6 +16,11 @@ DEVICE=${DEVICE:-phone-01}
 ADB=${ADB:-adb}
 TMP_REMOTE=/data/local/tmp/psychron-provision
 TMP_LOCAL=$(mktemp -d)
+# Under Git Bash, openssl and adb are native Windows programs that do not
+# understand MSYS paths such as /tmp/..., and automatic path conversion cannot
+# be left on because it would also rewrite the phone-side /data/local/tmp
+# paths into Windows ones. So local paths are made native here, and only here.
+if command -v cygpath >/dev/null 2>&1; then TMP_LOCAL=$(cygpath -m "$TMP_LOCAL"); fi
 
 cleanup() {
   rm -rf "$TMP_LOCAL"
