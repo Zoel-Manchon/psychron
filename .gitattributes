@@ -3,6 +3,11 @@
 # firmware and SQL are read by tools that are equally unforgiving.
 * text=auto eol=lf
 *.sh text eol=lf
+# The opposite rule for Windows scripts. cmd.exe resolves `goto` labels by
+# scanning lines, and with LF-only endings it can miss them; gradlew.bat uses
+# several, so a clone on Windows would fail to build with no useful message.
+*.bat text eol=crlf
+*.cmd text eol=crlf
 *.png binary
 *.gif binary
 *.mp4 binary
