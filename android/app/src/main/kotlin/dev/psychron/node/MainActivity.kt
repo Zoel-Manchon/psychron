@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
@@ -33,6 +34,8 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var counters: TextView
     private lateinit var clockLine: TextView
+    private lateinit var networkLine: TextView
+    private lateinit var dataLine: TextView
     private lateinit var provisioning: TextView
     private lateinit var toggle: TextView
     private lateinit var windowInfo: TextView
@@ -84,6 +87,10 @@ class MainActivity : Activity() {
         column.addView(counters)
         clockLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
         column.addView(clockLine)
+        networkLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
+        column.addView(networkLine)
+        dataLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
+        column.addView(dataLine)
 
         // A bordered control rather than a filled slab: the action matters, but
         // it is not the most important thing on a screen full of measurements.
@@ -147,14 +154,10 @@ class MainActivity : Activity() {
         // asks or not, so the system bars are padded for here rather than coloured:
         // without this the title sits underneath the status bar.
         root.setOnApplyWindowInsetsListener { _, insets ->
-            val top: Int
-            val bottom: Int
-            if (Build.VERSION.SDK_INT >= 30) {
-                val bars = insets.getInsets(WindowInsets.Type.systemBars())
-                top = bars.top; bottom = bars.bottom
+            val (top, bottom) = if (Build.VERSION.SDK_INT >= 30) {
+                insets.getInsets(WindowInsets.Type.systemBars()).let { it.top to it.bottom }
             } else {
-                @Suppress("DEPRECATION") top = insets.systemWindowInsetTop
-                @Suppress("DEPRECATION") bottom = insets.systemWindowInsetBottom
+                legacyInsets(insets)
             }
             // On the scroll view, not the column, with clipping on: padding inside
             // the column only helps at the top of the page, and once scrolled the
@@ -222,7 +225,7 @@ class MainActivity : Activity() {
         }
         status.text = when {
             s.running -> s.link
-            cfg != null -> "${cfg.device} → ${cfg.host}:${cfg.port}"
+            cfg != null -> "${cfg.device} → ${cfg.hosts.joinToString(" | ")} :${cfg.port}"
             else -> "not provisioned"
         }
         status.setTextColor(if (s.running && !connected) Ink.accent else Ink.ink)
@@ -231,6 +234,10 @@ class MainActivity : Activity() {
 
         clockLine.text = if (s.running) "time · ${s.clock}" else ""
         clockLine.setTextColor(if (s.clock.startsWith("NTP")) Ink.ink3 else Ink.accent)
+
+        networkLine.text = if (s.running) "network · ${s.network}${s.endpoint?.let { " → $it" } ?: ""}" else ""
+        networkLine.setTextColor(if (s.network == "no network") Ink.accent else Ink.ink3)
+        dataLine.text = if (s.running) dataUsage(s) else ""
 
         toggle.text = when {
             missing.isNotEmpty() -> "PROVISION FIRST"
@@ -310,7 +317,34 @@ class MainActivity : Activity() {
         return out
     }
 
+    /**
+     * What the node has cost in data, and what it would cost in a day at this rate.
+     * The daily figure is the one that matters on a mobile plan, and it is only
+     * shown once there is a minute of traffic to extrapolate from.
+     */
+    private fun dataUsage(s: NodeBus.State): String {
+        val parts = mutableListOf("mobile ${bytes(s.meteredBytes)}", "Wi-Fi ${bytes(s.unmeteredBytes)}")
+        val seconds = (SystemClock.elapsedRealtime() - s.startedElapsed) / 1000.0
+        if (seconds >= 60) {
+            val perDay = (s.meteredBytes + s.unmeteredBytes) / seconds * 86_400
+            parts += "≈ ${bytes(perDay.toLong())}/day"
+        }
+        return "data · " + parts.joinToString(" · ")
+    }
+
+    private fun bytes(n: Long): String = when {
+        n < 1_000 -> "$n B"
+        n < 1_000_000 -> String.format(Locale.ROOT, "%.0f kB", n / 1e3)
+        n < 10_000_000 -> String.format(Locale.ROOT, "%.1f MB", n / 1e6)
+        else -> String.format(Locale.ROOT, "%.0f MB", n / 1e6)
+    }
+
     // ── small builders ──────────────────────────────────────────────────────
+
+    // Android 10 only (minSdk 29): the typed insets API arrived in 11. A function of
+    // its own because Kotlin no longer accepts an annotation on an assignment.
+    @Suppress("DEPRECATION")
+    private fun legacyInsets(insets: WindowInsets) = insets.systemWindowInsetTop to insets.systemWindowInsetBottom
 
     private fun pair(a: View, b: View) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL

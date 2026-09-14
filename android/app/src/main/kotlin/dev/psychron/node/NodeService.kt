@@ -26,6 +26,7 @@ class NodeService : Service() {
     private lateinit var window: SensorWindow
     private lateinit var sound: SoundMeter
     private var link: MqttLink? = null
+    private var network: NetworkWatch? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val clock = TrustedClock { SystemClock.elapsedRealtime() }
@@ -72,12 +73,18 @@ class NodeService : Service() {
             .apply { acquire() }
 
         startClock()
-        link = MqttLink(this, config, WINDOW_MS).apply { start() }
+        // The link observes the watch, so it is built first and the watch started
+        // after: a change reported before anyone listens is a change missed.
+        val watch = NetworkWatch(this).also { network = it }
+        link = MqttLink(this, config, WINDOW_MS, watch)
+        watch.start()
+        link?.start()
         window.start()
         sound.start()
 
         NodeBus.update {
-            it.copy(running = true, sensors = window.present.toMap(), microphone = sound.available)
+            it.copy(running = true, sensors = window.present.toMap(), microphone = sound.available,
+                    meteredBytes = 0, unmeteredBytes = 0, startedElapsed = SystemClock.elapsedRealtime())
         }
 
         nextDeadline = SystemClock.uptimeMillis() + WINDOW_MS
@@ -108,7 +115,12 @@ class NodeService : Service() {
             quality = 0,
         )
         link?.offer(envelope, summary)
-        NodeBus.update { it.copy(latest = summary) }
+        val net = network
+        net?.sampleTraffic()
+        NodeBus.update {
+            it.copy(latest = summary, network = net?.label ?: it.network,
+                    meteredBytes = net?.meteredBytes ?: 0, unmeteredBytes = net?.unmeteredBytes ?: 0)
+        }
     }
 
     private fun startClock() {
@@ -148,9 +160,11 @@ class NodeService : Service() {
         clockThread?.interrupt()
         link?.stop()
         link = null
+        network?.stop()
+        network = null
         if (::thread.isInitialized) thread.quitSafely()
         wakeLock?.takeIf { it.isHeld }?.release()
-        NodeBus.update { it.copy(running = false, link = "stopped") }
+        NodeBus.update { it.copy(running = false, link = "stopped", endpoint = null) }
         super.onDestroy()
     }
 
@@ -179,7 +193,7 @@ class NodeService : Service() {
 
     companion object {
         const val WINDOW_MS = 2000
-        const val FIRMWARE = "android-0.3.0"
+        const val FIRMWARE = "android-0.4.0"
         // The same pool family the ESP32 and the Windows host use, so all three
         // nodes of the system are corrected against one standard.
         private val NTP_SERVERS = listOf("es.pool.ntp.org", "pool.ntp.org", "time.cloudflare.com")

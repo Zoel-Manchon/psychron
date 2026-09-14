@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 import org.eclipse.paho.client.mqttv3.MqttClient
@@ -17,7 +18,12 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
  * sending. That is what lets a window held through an outage be marked as replayed
  * truthfully: whether it was replayed is only known when it finally goes out.
  */
-class MqttLink(private val context: Context, private val config: NodeConfig, private val windowMs: Int) {
+class MqttLink(
+    private val context: Context,
+    private val config: NodeConfig,
+    private val windowMs: Int,
+    private val network: NetworkWatch,
+) {
 
     private data class Pending(val envelope: Contract.Envelope, val summary: Contract.Summary, val createdAt: Long)
 
@@ -28,9 +34,20 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
 
     @Volatile private var running = false
     private var worker: Thread? = null
-    private var client: MqttClient? = null
+    @Volatile private var client: MqttClient? = null
+    @Volatile private var endpoint: String? = null
+    /** The address that last connected, tried first until the network changes. */
+    @Volatile private var lastWorked: String? = null
+
+    // Released when the network changes, to cut a reconnect backoff short: waiting
+    // out 10 s after walking into Wi-Fi range is waiting for nothing.
+    private val wake = Semaphore(0)
 
     private val topic = "psychron/v2/${config.device}/sample"
+
+    init {
+        network.observe(::onNetworkChange)
+    }
 
     fun start() {
         running = true
@@ -57,6 +74,26 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
         NodeBus.update { it.copy(queued = queue.size) }
     }
 
+    private fun onNetworkChange(change: NetworkWatch.Change) {
+        lastWorked = null
+        val abandon = when (change) {
+            NetworkWatch.Change.SWITCHED -> true
+            // Only a stream to a LAN address dies with the LAN. One through a VPN
+            // or tunnel survives the phone changing networks underneath it, and
+            // tearing it down would turn a seamless handover into a visible gap.
+            NetworkWatch.Change.LOCAL_LOST -> endpoint?.let(Endpoints::isLocal) == true
+            NetworkWatch.Change.AVAILABLE, NetworkWatch.Change.LOCAL_GAINED -> false
+        }
+        Log.i(TAG, "network $change (${network.label}), abandon=$abandon")
+        if (abandon) {
+            // From this thread, not the worker's, because the worker may be blocked
+            // inside a publish on the very stream that just went quiet. Short
+            // timeouts: there is no point waiting to say goodbye on a dead network.
+            client?.let { runCatching { it.disconnectForcibly(100, 100) } }
+        }
+        wake.release()
+    }
+
     private fun loop() {
         var backoffMs = 1000L
         while (running) {
@@ -76,11 +113,24 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "link down: ${e.message}")
-                NodeBus.update { it.copy(link = "reconnecting · ${e.javaClass.simpleName}") }
+                NodeBus.update { it.copy(link = "reconnecting · ${e.javaClass.simpleName}", endpoint = null) }
                 runCatching { client?.close() }
                 client = null
-                try { Thread.sleep(backoffMs) } catch (_: InterruptedException) { return }
-                backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
+                endpoint = null
+                try {
+                    // A network change ends the wait early and starts the backoff over.
+                    if (wake.tryAcquire(backoffMs, TimeUnit.MILLISECONDS)) {
+                        wake.drainPermits()
+                        backoffMs = 1000L
+                        continue
+                    }
+                } catch (_: InterruptedException) {
+                    return
+                }
+                // Capped at 10 s rather than minutes. A queued window costs nothing to
+                // hold, but every second of backoff is a second of latency on all of
+                // them once the broker is back, and a refused connect is cheap.
+                backoffMs = (backoffMs * 2).coerceAtMost(10_000L)
             }
         }
     }
@@ -91,8 +141,25 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
         // leaks one.
         runCatching { client?.close() }
         client = null
-        NodeBus.update { it.copy(link = "connecting to ${config.host}:${config.port}") }
-        val c = MqttClient("ssl://${config.host}:${config.port}", "${config.device}-${System.nanoTime()}",
+        wake.drainPermits()
+
+        val order = Endpoints.order(config.hosts, network.onLocalNetwork, lastWorked)
+        var failure: Exception? = null
+        for (host in order) {
+            if (!running) throw InterruptedException()
+            try {
+                return connectTo(host)
+            } catch (e: Exception) {
+                Log.w(TAG, "$host:${config.port} refused: ${e.message}")
+                failure = e
+            }
+        }
+        throw failure ?: IllegalStateException("no broker address provisioned")
+    }
+
+    private fun connectTo(host: String): MqttClient {
+        NodeBus.update { it.copy(link = "connecting to $host:${config.port}") }
+        val c = MqttClient("ssl://$host:${config.port}", "${config.device}-${System.nanoTime()}",
                            MemoryPersistence())
         val options = MqttConnectOptions().apply {
             socketFactory = Provisioning.socketFactory(context)
@@ -100,7 +167,8 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
             // the broker's name during the handshake; the explicit verifier checks
             // it again afterwards. A certificate for any other host is refused either
             // way, which is the whole difference between TLS and encryption to a
-            // stranger.
+            // stranger. Every provisioned address must therefore be in the broker's
+            // certificate — infra/make-certs.sh puts them there.
             isHttpsHostnameVerificationEnabled = true
             sslHostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
             isCleanSession = true
@@ -109,9 +177,20 @@ class MqttLink(private val context: Context, private val config: NodeConfig, pri
             isAutomaticReconnect = false
             mqttVersion = MqttConnectOptions.MQTT_VERSION_3_1_1
         }
-        c.connect(options)
+        try {
+            c.connect(options)
+        } catch (e: Exception) {
+            runCatching { c.close() }
+            throw e
+        }
+        // A publish waits for its acknowledgement at most this long. Unbounded, a
+        // stream that died without a reset would hold the worker until the keepalive
+        // gave up, 45 s later.
+        c.timeToWait = 15_000L
         client = c
-        NodeBus.update { it.copy(link = "connected · mTLS") }
+        endpoint = host
+        lastWorked = host
+        NodeBus.update { it.copy(link = "connected · mTLS", endpoint = host) }
         return c
     }
 

@@ -15,6 +15,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Under Git Bash, an argument that starts with a slash is rewritten into a Windows
+# path before a native program sees it, and -subj "/O=psychron/CN=..." arrives at
+# openssl as "C:/Program Files/Git/O=psychron/...". Every path below is relative,
+# so conversion has nothing useful left to do here.
+export MSYS_NO_PATHCONV=1
+
 CERTS=certs
 DAYS_CA=3650
 DAYS_LEAF=730
@@ -27,8 +33,15 @@ DAYS_LEAF=730
 # reads, so the address the node dials and the address inside the certificate
 # come from one place and cannot disagree. Override with BROKER_IP=... to issue
 # a certificate for a host other than this one.
-env_host=$(sed -n 's/^PSYCHRON_MQTT_HOST=\([^ #]*\).*/\1/p' .env 2>/dev/null | head -1)
-BROKER_IP="${BROKER_IP:-${env_host:-127.0.0.1}}"
+env_value() { sed -n "s/^$1=\([^ #]*\).*/\1/p" .env 2>/dev/null | head -1; }
+BROKER_IP="${BROKER_IP:-$(env_value PSYCHRON_MQTT_HOST)}"
+BROKER_IP="${BROKER_IP:-127.0.0.1}"
+
+# A second address for nodes away from the LAN — a Tailscale or WireGuard address,
+# or a DNS name that reaches this host from outside. Optional. A node verifies the
+# broker's name against whichever address it dialled, so every address a node may
+# use has to be in the certificate, not only the one it uses at home.
+REMOTE_HOST="${REMOTE_HOST:-$(env_value PSYCHRON_MQTT_REMOTE_HOST)}"
 
 if [ "$BROKER_IP" = "127.0.0.1" ]; then
   echo "  NOTE: issuing for 127.0.0.1. A node on the LAN cannot use this," >&2
@@ -40,6 +53,25 @@ mkdir -p "$CERTS"
 chmod 700 "$CERTS" 2>/dev/null || true
 
 gen_key() { openssl ecparam -name prime256v1 -genkey -noout -out "$1"; }
+
+is_ip() { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; }
+
+# The names every server certificate must carry, one "IP:x" or "DNS:x" per line,
+# in the spelling openssl prints them in.
+wanted_sans() {
+  echo "IP Address:${BROKER_IP}"
+  echo "IP Address:127.0.0.1"
+  echo "DNS:localhost"
+  echo "DNS:psychron-broker"
+  if [ -n "$REMOTE_HOST" ]; then
+    if is_ip "$REMOTE_HOST"; then echo "IP Address:${REMOTE_HOST}"; else echo "DNS:${REMOTE_HOST}"; fi
+  fi
+}
+
+remote_san=""
+if [ -n "$REMOTE_HOST" ]; then
+  if is_ip "$REMOTE_HOST"; then remote_san="IP.3 = ${REMOTE_HOST}"; else remote_san="DNS.3 = ${REMOTE_HOST}"; fi
+fi
 
 cat > "$CERTS/ext.cnf" <<EOF
 [server]
@@ -53,6 +85,7 @@ IP.1 = ${BROKER_IP}
 IP.2 = 127.0.0.1
 DNS.1 = localhost
 DNS.2 = psychron-broker
+${remote_san}
 
 [client]
 basicConstraints = CA:FALSE
@@ -77,19 +110,36 @@ else
   echo "  issued CA, valid ${DAYS_CA} days"
 fi
 
-# ── broker ───────────────────────────────────────────────────────────────────
-if [ -f "$CERTS/broker.key" ]; then
-  echo "  broker certificate already exists, leaving it alone"
-else
-  gen_key "$CERTS/broker.key"
-  openssl req -new -key "$CERTS/broker.key" -out "$CERTS/broker.csr" \
-    -subj "/O=psychron/CN=psychron-broker"
-  openssl x509 -req -in "$CERTS/broker.csr" -CA "$CERTS/ca.crt" -CAkey "$CERTS/ca.key" \
-    -CAcreateserial -out "$CERTS/broker.crt" -days "$DAYS_LEAF" -sha256 \
+# ── server certificates ──────────────────────────────────────────────────────
+# Issued once, and re-signed — never re-keyed — when the set of names changes.
+# Re-signing is safe where re-keying is not: every node trusts the CA rather than
+# a particular leaf, so a broker certificate with one more address in it is
+# accepted by the ESP32 without reflashing and by the phone without reprovisioning.
+issue_server() {
+  local name="$1" cn="$2"
+  local key="$CERTS/$name.key" crt="$CERTS/$name.crt"
+  if [ -f "$key" ] && [ -f "$crt" ]; then
+    local have missing
+    have=$(openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr ',' '\n' | sed 's/^ *//')
+    missing=$(wanted_sans | while read -r san; do grep -qxF "$san" <<<"$have" || echo "$san"; done)
+    if [ -z "$missing" ]; then
+      echo "  $name certificate already covers every address, leaving it alone"
+      return
+    fi
+    echo "  $name certificate lacks: $(echo $missing) — re-signing with the existing key"
+  else
+    gen_key "$key"
+  fi
+  openssl req -new -key "$key" -out "$CERTS/$name.csr" -subj "/O=psychron/CN=$cn"
+  openssl x509 -req -in "$CERTS/$name.csr" -CA "$CERTS/ca.crt" -CAkey "$CERTS/ca.key" \
+    -CAcreateserial -out "$crt" -days "$DAYS_LEAF" -sha256 \
     -extfile "$CERTS/ext.cnf" -extensions server
-  rm -f "$CERTS/broker.csr"
-  echo "  issued broker certificate for IP ${BROKER_IP}"
-fi
+  rm -f "$CERTS/$name.csr"
+  echo "  issued $name certificate for ${BROKER_IP}${REMOTE_HOST:+ and $REMOTE_HOST}"
+  RESIGNED="${RESIGNED:-} $name"
+}
+
+issue_server broker psychron-broker
 
 # ── clients ──────────────────────────────────────────────────────────────────
 # The CN becomes the MQTT username: mosquitto is configured with
@@ -120,29 +170,13 @@ issue_client phone-01
 # The firmware server gets a server certificate of its own rather than reusing
 # the broker's: two services on one key means a compromise of either is a
 # compromise of both, and they have different lifetimes.
-if [ -f "$CERTS/fwserver.key" ]; then
-  echo "  firmware server certificate already exists, leaving it alone"
-else
-  gen_key "$CERTS/fwserver.key"
-  openssl req -new -key "$CERTS/fwserver.key" -out "$CERTS/fwserver.csr"     -subj "/O=psychron/CN=psychron-fwserver"
-  openssl x509 -req -in "$CERTS/fwserver.csr" -CA "$CERTS/ca.crt" -CAkey "$CERTS/ca.key"     -CAcreateserial -out "$CERTS/fwserver.crt" -days "$DAYS_LEAF" -sha256     -extfile "$CERTS/ext.cnf" -extensions server
-  rm -f "$CERTS/fwserver.csr"
-  echo "  issued firmware server certificate for IP ${BROKER_IP}"
-fi
+issue_server fwserver psychron-fwserver
 
 # The web edge. One certificate authority for the whole system rather than
 # Caddy's own internal CA: a browser has to be told to trust something either
 # way, and telling it to trust one root that already guards the broker and the
 # firmware server is a smaller ask than trusting a second one.
-if [ -f "$CERTS/web.key" ]; then
-  echo "  web certificate already exists, leaving it alone"
-else
-  gen_key "$CERTS/web.key"
-  openssl req -new -key "$CERTS/web.key" -out "$CERTS/web.csr"     -subj "/O=psychron/CN=psychron-web"
-  openssl x509 -req -in "$CERTS/web.csr" -CA "$CERTS/ca.crt" -CAkey "$CERTS/ca.key"     -CAcreateserial -out "$CERTS/web.crt" -days "$DAYS_LEAF" -sha256     -extfile "$CERTS/ext.cnf" -extensions server
-  rm -f "$CERTS/web.csr"
-  echo "  issued web certificate for IP ${BROKER_IP}"
-fi
+issue_server web psychron-web
 
 # Mosquitto refuses to start on a key it considers world readable.
 chmod 640 "$CERTS"/*.key 2>/dev/null || true
@@ -150,3 +184,8 @@ chmod 640 "$CERTS"/*.key 2>/dev/null || true
 echo
 echo "Certificates in infra/certs (gitignored). The private keys never leave it."
 openssl x509 -in "$CERTS/broker.crt" -noout -subject -dates -ext subjectAltName | sed 's/^/  /'
+if [ -n "${RESIGNED:-}" ] && docker compose ps --status running 2>/dev/null | grep -qE 'broker|web|fwserver'; then
+  echo
+  echo "  Re-signed:${RESIGNED}. Running services still hold the old certificate:"
+  echo "    docker compose restart broker web fwserver"
+fi

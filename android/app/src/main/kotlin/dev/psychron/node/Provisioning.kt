@@ -15,7 +15,8 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManagerFactory
 
-data class NodeConfig(val host: String, val port: Int, val device: String)
+/** [hosts] in the order provisioning listed them; [Endpoints] decides the order tried. */
+data class NodeConfig(val hosts: List<String>, val port: Int, val device: String)
 
 /**
  * The node's identity and where to send it, read from the app's private storage.
@@ -39,7 +40,8 @@ object Provisioning {
     fun config(ctx: Context): NodeConfig {
         val props = Properties().apply { File(dir(ctx), "node.properties").inputStream().use { load(it) } }
         return NodeConfig(
-            host = props.getProperty("host") ?: error("node.properties has no host"),
+            hosts = Endpoints.parse(props.getProperty("hosts"), props.getProperty("host"))
+                .ifEmpty { error("node.properties has no hosts") },
             port = props.getProperty("port")?.toInt() ?: 8883,
             device = props.getProperty("device") ?: error("node.properties has no device"),
         )

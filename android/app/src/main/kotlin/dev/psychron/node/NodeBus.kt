@@ -25,6 +25,15 @@ object NodeBus {
         val lastJson: String? = null,
         /** Where window timestamps come from, and how far the phone's own clock is off. */
         val clock: String = "system clock · NTP pending",
+        /** "Wi-Fi", "mobile data · VPN", ...: what the default network is. */
+        val network: String = "no network",
+        /** The broker address the link is connected to, when it is. */
+        val endpoint: String? = null,
+        /** This app's traffic since start, split by whether the network was metered. */
+        val meteredBytes: Long = 0,
+        val unmeteredBytes: Long = 0,
+        /** elapsedRealtime at start, to turn byte counts into a rate. */
+        val startedElapsed: Long = 0,
     )
 
     @Volatile var state = State()
