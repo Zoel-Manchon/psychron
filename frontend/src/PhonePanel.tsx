@@ -131,11 +131,15 @@ export function PhonePanel({ from, hours, theme }: Props) {
         <>
           <div className="phone-tiles">
             <div className="stack">
-              <span className="label">Pressure · barometer</span>
+              <span className="label">Pressure · barometer · station</span>
               <div>
                 <span className="reading-secondary">{fmt(current?.pressure_hpa, 1)}</span>
                 <span className="unit">hPa</span>
               </div>
+              {/* Station pressure, at the phone's altitude. A forecast quotes it
+                  reduced to sea level, so 956 hPa beside a weather site's 1015 reads
+                  as a faulty sensor unless the panel says which one this is. */}
+              <span className="mono-note">not reduced to sea level</span>
               <span className="mono-note">
                 {tendency === null
                   ? "no reading 3 h ago"

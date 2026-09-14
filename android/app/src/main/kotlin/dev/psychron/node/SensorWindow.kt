@@ -40,6 +40,13 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
     private val gyro = Stats()
     private val mag = Stats()
 
+    // Light is an on-change sensor: the platform emits nothing while the value
+    // holds steady, so a dark room that stays dark produces windows with no light
+    // event at all. For a sensor declared on-change, silence means "unchanged", and
+    // the last value is carried rather than the window reported as unmeasured.
+    private var lastLux: Double? = null
+    private var luxOnChange = false
+
     private val rotation = FloatArray(9)
     private val orientation = FloatArray(3)
     private var heading: Double? = null
@@ -67,13 +74,16 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
     private fun register(name: String, type: Int, delay: Int) {
         val sensor = sm.getDefaultSensor(type)
         present[name] = sensor != null
-        if (sensor != null) sm.registerListener(this, sensor, delay, handler)
+        if (sensor != null) {
+            if (type == Sensor.TYPE_LIGHT) luxOnChange = sensor.reportingMode == Sensor.REPORTING_MODE_ON_CHANGE
+            sm.registerListener(this, sensor, delay, handler)
+        }
     }
 
     override fun onSensorChanged(e: SensorEvent) {
         when (e.sensor.type) {
             Sensor.TYPE_PRESSURE -> pressure.add(e.values[0].toDouble())
-            Sensor.TYPE_LIGHT -> light.add(e.values[0].toDouble())
+            Sensor.TYPE_LIGHT -> e.values[0].toDouble().let { light.add(it); lastLux = it }
             Sensor.TYPE_LINEAR_ACCELERATION -> accel.add(norm(e.values))
             Sensor.TYPE_GYROSCOPE -> gyro.add(norm(e.values))
             Sensor.TYPE_MAGNETIC_FIELD -> mag.add(norm(e.values))
@@ -91,7 +101,7 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
     fun take(sound: Pair<Double, Double>?): Contract.Summary {
         val s = Contract.Summary(
             pressureHpa = pressure.mean(),
-            illuminanceLux = light.mean(),
+            illuminanceLux = light.mean() ?: lastLux?.takeIf { luxOnChange },
             soundRmsDbfs = sound?.first,
             soundPeakDbfs = sound?.second,
             accelRms = accel.rms(),

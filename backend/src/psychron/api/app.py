@@ -287,8 +287,14 @@ def create_app(dsn: str, env_path, device_id: str = "esp32-01",
         return (_authenticator is not None
                 and _authenticator.authenticate(f"Bearer {token}") is not None)
 
+    def _utc(instant: datetime) -> str:
+        # The same spelling FastAPI uses for the ESP32's readings. "+00:00" and "Z"
+        # are the same instant, but two payloads from one system should not look
+        # as if they came from two clocks when someone lays them side by side.
+        return instant.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     def _sample_payload(row: dict) -> dict:
-        out = {"time": row["time"].isoformat(),
+        out = {"time": _utc(row["time"]),
                "window_ms": row["window_ms"],
                "firmware": row["firmware"],
                "quality_flags": describe_quality(row["quality"])}
