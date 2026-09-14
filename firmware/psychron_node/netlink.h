@@ -17,6 +17,11 @@ bool        clockSynced();
 int         rssi();
 const char *resetReason();
 
+// Increments on every successful broker connection. A publish belongs to the
+// session it went out on; when the number moves, that session is over, even if
+// the reconnect happened inside a single loop pass and state() never said Down.
+uint32_t    session();
+
 bool publish(const char *topicSuffix, const char *payload, bool retain = false);
 
 }  // namespace netlink

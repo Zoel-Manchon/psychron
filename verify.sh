@@ -34,23 +34,41 @@ else
   meh "no virtualenv at backend/.venv — see the README"
 fi
 
-# ── the serialiser, on the host, under sanitisers ───────────────────────────
-rule "Firmware payload builder"
+# ── firmware units, on the host, under sanitisers ───────────────────────────
+rule "Firmware host tests"
+PAYLOAD_LABEL="payload: bounded writes, buffer sweep, ASan + UBSan clean"
+INFLIGHT_LABEL="unconfirmed publishes: horizon, order, overwrite, millis() wrap"
 if command -v g++ >/dev/null 2>&1; then
-  bin=$(mktemp -d)/test_payload
-  if g++ -std=c++17 -Wall -Wextra -fsanitize=address,undefined \
-         -I firmware/psychron_node firmware/test/test_payload.cpp \
-         firmware/psychron_node/payload.cpp -o "$bin" 2>/dev/null; then
-    if "$bin" > /dev/null 2>&1; then
-      ok "bounded writes, buffer sweep 1..122, ASan + UBSan clean"
-    else
-      no "payload tests"
-    fi
-  else
-    no "payload tests did not compile"
-  fi
+  dir=$(mktemp -d)
+  flags="-std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I firmware/psychron_node"
+  # shellcheck disable=SC2086
+  if g++ $flags firmware/test/test_payload.cpp firmware/psychron_node/payload.cpp -o "$dir/payload" 2>/dev/null \
+     && timeout 60 "$dir/payload" > /dev/null 2>&1; then ok "$PAYLOAD_LABEL"; else no "payload tests"; fi
+  # shellcheck disable=SC2086
+  if g++ $flags firmware/test/test_inflight.cpp -o "$dir/inflight" 2>/dev/null \
+     && timeout 60 "$dir/inflight" > /dev/null 2>&1; then ok "$INFLIGHT_LABEL"; else no "inflight tests"; fi
+  rm -rf "$dir"
+elif docker info >/dev/null 2>&1; then
+  # No compiler on the host is no reason to skip the suites that check memory
+  # safety. The same flags, in a throwaway Linux container: the sanitizers need
+  # glibc, which rules out the smaller Alpine images. One container for both, and
+  # each result reported on its own line so a failure names its suite.
+  #
+  # trixie, not bookworm: GCC 12's AddressSanitizer cannot map its shadow memory
+  # under the 32 bits of mmap randomisation that recent kernels (WSL2's 6.18
+  # among them) use, and instead of failing it prints DEADLYSIGNAL forever — gigabytes
+  # of it, measured. GCC 14 copes. The timeouts are there so no future toolchain
+  # regression can turn a test run into a disk-filling loop again.
+  results=$(MSYS_NO_PATHCONV=1 docker run --rm --cap-add=SYS_PTRACE \
+       -v "$(pwd -W 2>/dev/null || pwd)/firmware:/fw:ro" debian:trixie-slim sh -c '
+       apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends g++ >/dev/null 2>&1 || exit 0
+       F="-std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I/fw/psychron_node"
+       g++ $F /fw/test/test_payload.cpp /fw/psychron_node/payload.cpp -o /tmp/p >/dev/null 2>&1 && timeout 60 /tmp/p >/dev/null 2>&1 && echo payload=ok
+       g++ $F /fw/test/test_inflight.cpp -o /tmp/i >/dev/null 2>&1 && timeout 60 /tmp/i >/dev/null 2>&1 && echo inflight=ok' 2>/dev/null | head -c 1000)
+  case "$results" in *payload=ok*)  ok "$PAYLOAD_LABEL (in Docker)" ;;  *) no "payload tests (in Docker)" ;; esac
+  case "$results" in *inflight=ok*) ok "$INFLIGHT_LABEL (in Docker)" ;; *) no "inflight tests (in Docker)" ;; esac
 else
-  meh "no g++ on PATH — the host tests need a C++17 compiler"
+  meh "no g++ and no Docker — the host tests need a C++17 compiler"
 fi
 
 # ── the claim that cannot be checked by a unit test ─────────────────────────

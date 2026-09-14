@@ -11,7 +11,7 @@
   #error "secrets.h is missing: copy secrets.h.example to secrets.h and fill it in"
 #endif
 
-#define FW_VERSION        "1.1.0"
+#define FW_VERSION        "1.2.2"
 #define CONTRACT_VERSION  1
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
@@ -51,9 +51,28 @@
 #define TOPIC_STATUS      "/status"    // retained: "online" / "offline" via LWT
 #define TOPIC_BOOT        "/boot"
 
-#define MQTT_KEEPALIVE_S  30
+// 15 s rather than 30: a dead stream is only noticed after up to two keepalives,
+// and every reading published in that time has to be held for replay. The cost is
+// one 2-byte ping every 15 s.
+#define MQTT_KEEPALIVE_S  15
+
+// Every network call runs inside the sampling loop, so its worst case is a gap in
+// the record. The core's defaults are a 30 s TCP connect and a 120 s TLS handshake:
+// measured, one reconnect attempt during a host network flap stopped sampling for
+// 37 s. On a LAN a connect answers in milliseconds and a P-256 handshake takes
+// about two seconds, so these bound an attempt that is going to fail anyway.
+#define NET_TIMEOUT_MS     5000UL      // TCP connect, and each socket read or write
+#define TLS_HANDSHAKE_S    8UL
+#define MQTT_SOCKET_S      5           // waiting for CONNACK
 #define MQTT_BUFFER_BYTES 512          // a reading is ~150 B; PubSubClient
                                        // silently drops anything over its buffer
+
+// How long a publish stays unproven: two keepalives to notice a dead stream, plus
+// 15 s for TCP to give up retransmitting what was already in flight. See inflight.h.
+#define UNCONFIRMED_HORIZON_MS  (2UL * MQTT_KEEPALIVE_S * 1000UL + 15000UL)
+// Kept free in the unconfirmed window for live readings while a backlog drains,
+// so replay can never push a fresh reading out of it. 45 s of readings, doubled.
+#define LIVE_HEADROOM           32
 
 // ── Firmware updates ─────────────────────────────────────────────────────────
 // Served from the same host as the broker, behind the same CA and the same

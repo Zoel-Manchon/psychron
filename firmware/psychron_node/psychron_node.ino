@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include "config.h"
 #include "certstore.h"
+#include "inflight.h"
 #include "netlink.h"
 #include "ota.h"
 #include "payload.h"
@@ -34,6 +35,11 @@ static uint32_t seq    = 0;
 
 static const NodeIdentity IDENTITY = {DEVICE_ID, FW_VERSION, CONTRACT_VERSION};
 
+// Global rather than on the stack: the window is ~9 KB and the loop task has 8.
+static inflight::Window unconfirmed(UNCONFIRMED_HORIZON_MS);
+static uint32_t unconfirmedSession = 0;
+static uint32_t lostReadings = 0;
+
 static bool publishRecord(const StoreRecord &r) {
   char payload[MQTT_BUFFER_BYTES];
   // A zero length means the payload did not fit and buf holds a truncated
@@ -43,7 +49,30 @@ static bool publishRecord(const StoreRecord &r) {
     Serial.println(F("payload: reading did not fit the buffer, not sent"));
     return false;
   }
-  return netlink::publish(TOPIC_READING, payload);
+  if (!netlink::publish(TOPIC_READING, payload)) return false;
+  // Accepted by the client is not received by the broker; held until it is proven.
+  unconfirmed.sent(r, millis());
+  return true;
+}
+
+// The session every held publish went out on has ended — dropped, or replaced by
+// a reconnect inside one pass. What is still unproven goes back to the store and
+// is replayed. Records already queued there are newer, so a flap in the middle of
+// a drain replays these after them; ingestion places each reading by its own
+// clock and seq, so the order of arrival changes nothing that is stored.
+static void reclaimUnconfirmed() {
+  const bool up = netlink::state() == LinkState::Up;
+  if (up && netlink::session() == unconfirmedSession) return;
+
+  if (unconfirmed.size() > 0) {
+    const size_t n = unconfirmed.reclaim(millis(), [](const StoreRecord &r) {
+      StoreRecord again = r;
+      again.quality |= Q_REPLAYED;
+      if (!store::push(again)) lostReadings++;
+    });
+    Serial.printf("LINK;session_ended;requeued=%u\n", (unsigned)n);
+  }
+  if (up) unconfirmedSession = netlink::session();
 }
 
 // Buffered readings go out before anything new, so the series arrives in the
@@ -51,7 +80,12 @@ static bool publishRecord(const StoreRecord &r) {
 static void drainStore() {
   if (netlink::state() != LinkState::Up) return;
 
-  for (uint8_t sent = 0; sent < 20 && store::count() > 0; sent++) {
+  // A drained record leaves the store the moment it is published, so it is only
+  // safe while the unconfirmed window can still hold it. That bounds replay to
+  // about 5 records a second, under twenty minutes for a full store.
+  unconfirmed.expire(millis());
+  for (uint8_t sent = 0; sent < 20 && store::count() > 0 && unconfirmed.room() > LIVE_HEADROOM;
+       sent++) {
     StoreRecord r;
     if (!store::peek(r)) break;
     r.quality |= Q_REPLAYED;
@@ -59,8 +93,6 @@ static void drainStore() {
     store::pop();
   }
 }
-
-static uint32_t lostReadings = 0;
 
 static void handOff(StoreRecord &r) {
   // Live only when the queue is already empty. Publishing a fresh reading past a
@@ -140,6 +172,9 @@ void loop() {
   // answers, and keeps sampling into the flash buffer while it waits.
   provisioning::poll();
   netlink::loop();
+  // Straight after the link is serviced, before anything is drained or read: a
+  // reading taken this pass must queue behind the ones it outlived.
+  reclaimUnconfirmed();
 
   static bool announced = false;
   if (!announced && netlink::state() == LinkState::Up) {

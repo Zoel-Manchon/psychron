@@ -29,6 +29,7 @@ uint32_t lastWifiTry = 0;
 uint32_t lastMqttTry = 0;
 uint32_t lastNtpSync = 0;
 bool     ntpStarted  = false;
+uint32_t sessions    = 0;
 
 
 void buildTopics() {
@@ -80,6 +81,8 @@ void serviceMqtt() {
     tls.setCACert(certstore::ca());
     tls.setCertificate(certstore::cert());
     tls.setPrivateKey(certstore::key());
+    tls.setConnectionTimeout(NET_TIMEOUT_MS);
+    tls.setHandshakeTimeout(TLS_HANDSHAKE_S);
     tlsConfigured = true;
   }
 
@@ -90,6 +93,7 @@ void serviceMqtt() {
   const bool ok = mqtt.connect(DEVICE_ID, nullptr, nullptr,
                                topicStatus, 1, true, "offline");
   if (ok) {
+    sessions++;
     mqtt.publish(topicStatus, "online", true);
     return;
   }
@@ -120,6 +124,7 @@ void begin() {
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setKeepAlive(MQTT_KEEPALIVE_S);
+  mqtt.setSocketTimeout(MQTT_SOCKET_S);
   // PubSubClient drops any message larger than its buffer without reporting it,
   // so this has to be raised past the payload size rather than left at 256.
   mqtt.setBufferSize(MQTT_BUFFER_BYTES);
@@ -173,6 +178,10 @@ const char *resetReason() {
     case ESP_RST_DEEPSLEEP: return "deepsleep";
     default:               return "unknown";
   }
+}
+
+uint32_t session() {
+  return sessions;
 }
 
 bool publish(const char *topicSuffix, const char *payload, bool retain) {

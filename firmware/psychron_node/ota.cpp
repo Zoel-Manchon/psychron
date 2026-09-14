@@ -56,6 +56,10 @@ void configure(WiFiClientSecure &client) {
   client.setCACert(certstore::ca());
   client.setCertificate(certstore::cert());
   client.setPrivateKey(certstore::key());
+  // The same bounds as the broker link: a manifest check runs in the sampling loop,
+  // and one against an unreachable host must not cost a minute of readings.
+  client.setConnectionTimeout(NET_TIMEOUT_MS);
+  client.setHandshakeTimeout(TLS_HANDSHAKE_S);
 }
 
 // Streams the image into the OTA partition while hashing it, and refuses to
@@ -66,6 +70,7 @@ bool download(const char *path, const char *expectDigest, long expectSize) {
   configure(client);
 
   HTTPClient http;
+  http.setReuse(false);
   String url = String("https://") + MQTT_HOST + ":" + OTA_PORT + path;
   if (!http.begin(client, url)) {
     setResult("image: begin failed");
@@ -160,25 +165,34 @@ void poll() {
   if (lastCheck && millis() - lastCheck < OTA_CHECK_MS) return;
   lastCheck = millis();
 
-  WiFiClientSecure client;
-  configure(client);
+  String body;
+  {
+    // Scoped, and not reused: HTTPClient keeps a connection open after end() by
+    // default, and this one would still hold a TLS session to the firmware server
+    // — tens of kilobytes of heap — while download() opens a second one next to the
+    // broker's. The update was seen failing on the first attempt after a new
+    // manifest and succeeding on the next, with no request for the image in between.
+    WiFiClientSecure client;
+    configure(client);
 
-  HTTPClient http;
-  String url = String("https://") + MQTT_HOST + ":" + OTA_PORT + OTA_MANIFEST;
-  if (!http.begin(client, url)) {
-    setResult("manifest: begin failed");
-    return;
-  }
+    HTTPClient http;
+    http.setReuse(false);
+    String url = String("https://") + MQTT_HOST + ":" + OTA_PORT + OTA_MANIFEST;
+    if (!http.begin(client, url)) {
+      setResult("manifest: begin failed");
+      return;
+    }
 
-  const int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    setResult("manifest: HTTP %d", code);
+    const int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+      setResult("manifest: HTTP %d", code);
+      http.end();
+      return;
+    }
+
+    body = http.getString();
     http.end();
-    return;
   }
-
-  const String body = http.getString();
-  http.end();
 
   char version[24], image[64], digest[72], sizeText[16];
   if (!field(body, "version", version, sizeof(version)) ||
