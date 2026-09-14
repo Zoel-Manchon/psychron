@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+# Device credentials are pushed to the phone by infra/provision-phone.sh and
+# never live in this tree.
+*.pk8
+*.key
