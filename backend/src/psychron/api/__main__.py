@@ -15,7 +15,18 @@ env = load_env()
 # Secure flag or the browser will happily send it over plain HTTP should the
 # site ever become reachable that way. Off by default because development runs
 # on loopback without TLS, and a Secure cookie there is simply never stored.
-app = create_app(dsn_from(env), DEFAULT_ENV)
+def _optional_float(name: str) -> float | None:
+    raw = env.get(name, "").strip()
+    return float(raw) if raw else None
+
+
+# Both optional. PSYCHRON_STATION_ELEVATION_M is where the phone usually sits,
+# used only when its own GNSS has no confident altitude; PSYCHRON_PHONE_SPL_OFFSET_DB
+# is measured, never guessed: a reference sound level meter's dB(A) minus the
+# phone's LAeq in dBFS(A), over the same steady noise.
+app = create_app(dsn_from(env), DEFAULT_ENV,
+                 station_elevation_m=_optional_float("PSYCHRON_STATION_ELEVATION_M"),
+                 spl_offset_db=_optional_float("PSYCHRON_PHONE_SPL_OFFSET_DB"))
 
 if __name__ == "__main__":
     # Bound to loopback: Caddy is the only public face.

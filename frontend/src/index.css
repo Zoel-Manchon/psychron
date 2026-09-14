@@ -206,6 +206,28 @@ input:focus { outline: none; border-bottom: 1px solid var(--accent); }
    the range, and nothing is coloured by whether the value is good. */
 .meter-scale { margin: 6px 0 2px; }
 .meter-scale > span { background: var(--accent); }
+.ink { color: var(--ink); }
+
+.phone-lower { display: grid; gap: 22px 26px; margin-top: 26px; }
+@media (min-width: 1080px) { .phone-lower { grid-template-columns: 3fr 2fr; } }
+.phone-lower > * { min-width: 0; }
+.track { width: 100%; height: auto; display: block; margin-top: 8px; }
+
+.events { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); }
+.events th { text-align: left; font-weight: 400; font-size: 10px; letter-spacing: 0.1em;
+             text-transform: uppercase; color: var(--ink-3); padding: 4px 8px 4px 0;
+             border-bottom: 1px solid var(--rule); }
+.events td { font-size: 12px; padding: 5px 8px 5px 0; white-space: nowrap; }
+
+/* ── alerts ──────────────────────────────────────────────────────────────── */
+
+/* One line per open alert, above everything else and quiet about it: a rule in
+   the accent colour and the sentence the evaluator wrote, not a modal or a siren. */
+.alert-band { border-left: 3px solid var(--accent); padding: 8px 12px; margin-top: 14px;
+              background: var(--fill); display: flex; flex-wrap: wrap; gap: 4px 14px;
+              align-items: baseline; }
+.alert-band + .alert-band { margin-top: 6px; }
+.alert-band strong { font-weight: 500; color: var(--ink); }
 
 /* uPlot draws its own furniture; these bring it onto the same page. */
 .uplot, .u-wrap { font-family: var(--mono) !important; }

@@ -24,26 +24,37 @@ import paho.mqtt.client as mqtt
 
 from .cli import DEFAULT_ENV, load_env
 from .domain.telemetry import Q_REPLAYED
+from .domain.weather import station_pressure
 
-FIRMWARE = "sim-0.1.0"
+FIRMWARE = "sim-0.2.0"
 
 
 class Room:
     """Plausible physics, not noise. A barometric trace that wanders like the
     atmosphere, light that follows the hour, a quiet room with occasional events."""
 
+    # A public square, not anyone's address: the simulated walk starts here.
+    ORIGIN = (40.416775, -3.703790)
+    ALTITUDE_M = 657.0
+
     def __init__(self, seed: int) -> None:
         self.rng = random.Random(seed)
-        self.pressure = 1013.2
+        # Station pressure at the walk's altitude, so that reducing it to sea
+        # level lands on an ordinary day rather than a record high.
+        self.base_hpa = station_pressure(1013.2, self.ALTITUDE_M)
+        self.pressure = self.base_hpa
         self.heading = self.rng.uniform(0, 360)
         self.battery = 30.5
+        self.east_m = self.north_m = 0.0
+        self.l_history: list[float] = []
+        self.event_pending: dict | None = None
 
     def window(self, epoch: float, win_s: float) -> dict:
         r = self.rng
         hour = (epoch / 3600.0) % 24
 
         # A slow random walk around a front passing through: ~1 hPa over hours.
-        self.pressure += r.gauss(0, 0.004 * win_s) - 0.0002 * (self.pressure - 1013.2)
+        self.pressure += r.gauss(0, 0.004 * win_s) - 0.0002 * (self.pressure - self.base_hpa)
         pressure = self.pressure + 0.35 * math.sin(2 * math.pi * hour / 12)
 
         daylight = max(0.0, math.sin(math.pi * (hour - 7) / 13))
@@ -61,6 +72,35 @@ class Room:
 
         self.battery += r.gauss(0, 0.02) - 0.01 * (self.battery - 30.5)
 
+        # A slow walk: 1.2 m/s along the heading, turning now and then. Station
+        # pressure follows the height of the ground, ~0.12 hPa per metre.
+        speed = abs(r.gauss(1.2, 0.2))
+        self.east_m += speed * win_s * math.sin(math.radians(self.heading))
+        self.north_m += speed * win_s * math.cos(math.radians(self.heading))
+        ground_m = 3.0 * math.sin(self.east_m / 40.0)
+        pressure -= 0.12 * ground_m
+        lat = self.ORIGIN[0] + self.north_m / 111_320.0
+        lon = self.ORIGIN[1] + self.east_m / (111_320.0 * math.cos(math.radians(self.ORIGIN[0])))
+
+        # A-weighting takes a few dB off a room's low-frequency hum.
+        laeq = max(-160.0, rms - 3.0)
+        self.l_history = (self.l_history + [laeq])[-30:]
+        ordered = sorted(self.l_history)
+        noise = {"laeq": round(laeq, 1), "lamax": round(min(0.0, laeq + 6 + abs(r.gauss(0, 2))), 1)}
+        if len(ordered) >= 15:
+            noise["l10"] = round(ordered[int(0.9 * (len(ordered) - 1))], 1)
+            noise["l90"] = round(ordered[int(0.1 * (len(ordered) - 1))], 1)
+
+        # Signal falls off with distance from a mast 300 m east of the start.
+        mast_m = math.hypot(self.east_m - 300.0, self.north_m)
+        rsrp = max(-140.0, min(-44.0, -70.0 - 22.0 * math.log10(max(mast_m, 10.0) / 10.0) + r.gauss(0, 2)))
+
+        if event:
+            self.event_pending = {"kind": "vibration", "dur": int(r.uniform(300, 2500)),
+                                  "pga": round(abs(r.gauss(0.25, 0.1)) + 0.05, 3),
+                                  "ratio": round(r.uniform(4.2, 12.0), 1),
+                                  "freq": round(r.uniform(4.0, 30.0), 1)}
+
         return {
             "baro": {"hpa": round(pressure, 2)},
             "light": {"lux": round(lux, 1)},
@@ -70,6 +110,15 @@ class Room:
             "mag": {"ut": round(42 + r.gauss(0, 0.6), 1),
                     "heading": round(self.heading % 360, 1)},
             "batt": {"c": round(self.battery, 1)},
+            "loc": {"lat": round(lat, 6), "lon": round(lon, 6), "acc": round(abs(r.gauss(4, 1)) + 1, 1),
+                    "alt": round(self.ALTITUDE_M + ground_m + r.gauss(0, 1.5), 1),
+                    "alt_acc": round(abs(r.gauss(4, 1)) + 2, 1), "spd": round(speed, 2)},
+            "noise": noise,
+            "cell": {"rat": "nr" if rsrp > -105 else "lte", "rsrp": round(rsrp, 1),
+                     "rsrq": round(max(-43.0, min(20.0, -9.0 + (rsrp + 90) / 8 + r.gauss(0, 1))), 1),
+                     "sinr": round(max(-23.0, min(40.0, 18.0 + (rsrp + 90) / 3 + r.gauss(0, 2))), 1),
+                     "band": 78 if rsrp > -105 else 20},
+            "net": {"via": "cell", "vpn": True, "rtt": round(abs(r.gauss(65, 15)) + 20, 1)},
         }
 
 
@@ -96,23 +145,41 @@ def main(argv: list[str] | None = None) -> int:
     client.loop_start()
 
     topic = f"psychron/v2/{args.device}/sample"
+    event_topic = f"psychron/v2/{args.device}/event"
     boot = secrets.randbits(32)
     room = Room(boot)
     win_ms = int(args.window * 1000)
     start = time.time()
     seq = 0
+    event_seq = 0
+
+    def clock(epoch: float, replayed: bool) -> dict:
+        # A replayed message carries no clock of its own: it is placed by the boot
+        # anchor, which is the mechanism this exists to exercise.
+        if replayed:
+            return {"ts": None}
+        return {"ts": int(epoch), "ms": int((epoch % 1) * 1000)}
 
     def publish(end_epoch: float, number: int, replayed: bool = False) -> None:
+        nonlocal event_seq
         msg = {
             "v": 2, "dev": args.device, "fw": FIRMWARE, "boot": boot, "seq": number,
-            # A replayed window carries no clock of its own: it is placed by the
-            # boot anchor, which is the mechanism this exists to exercise.
-            "ts": None if replayed else int(end_epoch),
+            **clock(end_epoch, replayed),
             "up": int((end_epoch - start) * 1000),
             "win": win_ms, "q": Q_REPLAYED if replayed else 0,
             **room.window(end_epoch, args.window),
         }
         client.publish(topic, json.dumps(msg), qos=1).wait_for_publish(5)
+        if room.event_pending is not None:
+            # Started somewhere inside the window just summarised.
+            began = end_epoch - args.window * room.rng.random()
+            event_seq += 1
+            client.publish(event_topic, json.dumps({
+                "v": 2, "dev": args.device, "fw": FIRMWARE, "boot": boot, "seq": event_seq,
+                **clock(began, replayed), "up": int((began - start) * 1000),
+                "q": Q_REPLAYED if replayed else 0, **room.event_pending,
+            }), qos=1).wait_for_publish(5)
+            room.event_pending = None
 
     if args.backfill > 0:
         # Behaves like a phone that was offline for the whole period. The order

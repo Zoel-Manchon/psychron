@@ -26,6 +26,16 @@ FULL = {
 }
 
 
+# Revision 2: the groups a phone adds once it has location, a modem and a
+# weighted sound meter. Every field filled, optional ones included.
+REVISION_2 = {
+    "loc": {"lat": 40.416775, "lon": -3.70379, "acc": 4.5, "alt": 657.2, "alt_acc": 3.1, "spd": 1.2},
+    "noise": {"laeq": -52.4, "lamax": -41.0, "l10": -47.9, "l90": -58.3},
+    "cell": {"rat": "nr", "rsrp": -97.0, "rsrq": -11.0, "sinr": 8.5, "band": 78},
+    "net": {"via": "cell", "vpn": True, "rtt": 84.0},
+}
+
+
 def payload(groups=None, **over) -> bytes:
     base = {"v": 2, "dev": "phone-01", "fw": "0.1.0", "boot": 3141592653, "seq": 42,
             "ts": int(T0.timestamp()), "up": 84000, "win": 2000, "q": 0}
@@ -57,7 +67,7 @@ class TestParse:
         doc = (__import__("pathlib").Path(__file__).parents[2] / "docs"
                / "CONTRACT-v2.md").read_text(encoding="utf-8")
         block = doc.split("```json", 1)[1].split("```", 1)[0]
-        assert parse(block.encode()).measurements.present() == 11
+        assert parse(block.encode()).measurements.present() == 29
 
     def test_an_absent_group_means_no_sample(self):
         m = parse(payload(without("baro"))).measurements
@@ -121,13 +131,14 @@ class TestClosedSchema:
 class TestRanges:
     @pytest.mark.parametrize(
         ("group", "field"),
-        [(g, f) for g, spec in SCHEMA.items() for f in spec],
+        [(g, f) for g, spec in SCHEMA.items() for f, s in spec.items()
+         if s.kind in ("number", "integer")],
     )
     def test_every_bound_is_enforced(self, group, field):
-        _, lo, hi, _ = SCHEMA[group][field]
-        body = dict(FULL[group])
-        for value in (lo - 1, hi + 1):
-            body[field] = value
+        spec = SCHEMA[group][field]
+        body = dict({**FULL, **REVISION_2}[group])
+        for value in (spec.lo - 1, spec.hi + 1):
+            body[field] = int(value) if spec.kind == "integer" else value
             with pytest.raises(InvalidMessage, match="outside"):
                 parse(payload({group: body}))
 
@@ -139,6 +150,53 @@ class TestRanges:
     def test_sound_at_full_scale_is_accepted(self):
         m = parse(payload({"sound": {"rms_dbfs": 0.0, "peak_dbfs": 0.0}})).measurements
         assert m.sound_peak_dbfs == 0.0
+
+
+class TestRevision2:
+    def test_every_revision_group_parses(self):
+        m = parse(payload({**FULL, **REVISION_2})).measurements
+        assert m.present() == 29
+        assert m.lat == pytest.approx(40.416775)
+        assert m.alt_msl_m == pytest.approx(657.2)
+        assert m.noise_l90_dbfs == pytest.approx(-58.3)
+        assert m.cell_rat == "nr" and m.cell_band == 78
+        assert m.net_via == "cell" and m.net_vpn is True
+
+    def test_optional_fields_may_be_absent(self):
+        m = parse(payload({"loc": {"lat": 1.0, "lon": 2.0, "acc": 30.0},
+                           "noise": {"laeq": -60.0, "lamax": -50.0},
+                           "cell": {"rat": "lte", "rsrp": -110.0, "rsrq": -14.0},
+                           "net": {"via": "wifi", "vpn": False}})).measurements
+        assert m.alt_msl_m is None and m.speed_ms is None
+        assert m.noise_l10_dbfs is None
+        assert m.cell_sinr_db is None and m.cell_band is None
+        assert m.net_rtt_ms is None and m.net_vpn is False
+
+    def test_required_fields_are_still_required(self):
+        with pytest.raises(InvalidMessage, match="missing lon"):
+            parse(payload({"loc": {"lat": 1.0, "acc": 5.0}}))
+
+    def test_an_optional_field_is_not_nullable(self):
+        # Absent means unmeasured; null would be the second way of saying it.
+        with pytest.raises(InvalidMessage, match="omit"):
+            parse(payload({"cell": {"rat": "lte", "rsrp": -100.0, "rsrq": -10.0, "sinr": None}}))
+
+    def test_altitude_accuracy_needs_an_altitude(self):
+        with pytest.raises(InvalidMessage, match="alt_acc without"):
+            parse(payload({"loc": {"lat": 1.0, "lon": 2.0, "acc": 5.0, "alt_acc": 3.0}}))
+
+    @pytest.mark.parametrize("rat", ["LTE", "5g", "umts", 4])
+    def test_radio_technology_is_a_closed_set(self, rat):
+        with pytest.raises(InvalidMessage, match="must be one of"):
+            parse(payload({"cell": {"rat": rat, "rsrp": -100.0, "rsrq": -10.0}}))
+
+    def test_a_flag_is_a_json_boolean_not_a_number(self):
+        with pytest.raises(InvalidMessage, match="true or false"):
+            parse(payload({"net": {"via": "wifi", "vpn": 1}}))
+
+    def test_a_band_is_an_integer(self):
+        with pytest.raises(InvalidMessage, match="must be an integer"):
+            parse(payload({"cell": {"rat": "nr", "rsrp": -90.0, "rsrq": -9.0, "band": 78.5}}))
 
 
 class TestSharedTimestampRule:

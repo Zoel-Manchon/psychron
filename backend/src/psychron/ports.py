@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable, Protocol
 
+from .domain.alerts import Observation, Transition
+from .domain.events import ResolvedEvent
 from .domain.samples import ResolvedSample
 from .domain.telemetry import ResolvedReading
 
@@ -21,6 +23,9 @@ class ReadingRepository(Protocol):
 
     def store_sample(self, sample: ResolvedSample) -> bool:
         """Persist a v2 window summary. Returns False when it was already there."""
+
+    def store_event(self, event: ResolvedEvent) -> bool:
+        """Persist a v2 event. Returns False when it was already there."""
 
     def store_rejected(self, topic: str, payload: bytes, reason: str,
                        device_id: str | None) -> None:
@@ -44,3 +49,19 @@ class TelemetrySource(Protocol):
 
     def stop(self) -> None:
         ...
+
+
+class AlertStore(Protocol):
+    def observe(self) -> Observation:
+        """What the record says right now, reduced to what the rules read."""
+
+    def open_alerts(self) -> set[tuple[str, str]]:
+        """(kind, device_id) for every episode not yet cleared."""
+
+    def apply(self, transition: Transition) -> bool:
+        """Record a transition. False if another writer got there first."""
+
+
+class AlertSink(Protocol):
+    def publish(self, topic: str, payload: bytes, retain: bool) -> None:
+        """Tell subscribers. Best effort: the alert table is the record."""

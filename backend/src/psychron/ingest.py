@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .domain import samples
+from .domain import events, samples
 from .domain.telemetry import BootAnchors, InvalidMessage, parse, resolve
 from .ports import ReadingRepository
 
@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 class IngestStats:
     stored: int = 0
     samples: int = 0
+    events: int = 0
     duplicates: int = 0
     rejected: int = 0
     boots: int = 0
@@ -55,6 +56,9 @@ class Ingestor:
         # accepting it would let the topic and the payload disagree silently.
         if topic.startswith("psychron/v2/") and topic.endswith("/sample"):
             self._handle_sample(topic, payload, received_at)
+            return
+        if topic.startswith("psychron/v2/") and topic.endswith("/event"):
+            self._handle_event(topic, payload, received_at)
             return
         if not (topic.startswith("psychron/v1/") and topic.endswith("/reading")):
             return
@@ -95,6 +99,24 @@ class Ingestor:
 
         if self.repo.store_sample(samples.resolve(msg, received_at, self.anchors)):
             self.stats.samples += 1
+        else:
+            self.stats.duplicates += 1
+
+    def _handle_event(self, topic: str, payload: bytes, received_at: datetime) -> None:
+        try:
+            msg = events.parse(payload)
+        except InvalidMessage as exc:
+            self._reject(topic, payload, str(exc))
+            return
+
+        expected = self._device_from_topic(topic)
+        if expected is not None and expected != msg.device_id:
+            self._reject(topic, payload,
+                         f"identity mismatch: topic says {expected}, payload says {msg.device_id}")
+            return
+
+        if self.repo.store_event(events.resolve(msg, received_at, self.anchors)):
+            self.stats.events += 1
         else:
             self.stats.duplicates += 1
 

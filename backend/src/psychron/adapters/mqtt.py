@@ -75,5 +75,18 @@ class MqttTelemetrySource:
         self._client.connect(self._host, self._port, keepalive=60)
         self._client.loop_forever(retry_first_connection=True)
 
+    def publish(self, topic: str, payload: bytes, retain: bool) -> None:
+        """From any thread: paho queues the message for the network loop.
+
+        QoS 1 and not waited on. If the broker is unreachable the message waits in
+        paho's queue until it is back, and the alert table holds the truth either
+        way — a notification is a courtesy, not the record.
+        """
+        info = self._client.publish(topic, payload, qos=1, retain=retain)
+        if info.rc == mqtt.MQTT_ERR_NO_CONN:
+            log.warning("broker not connected; %s is queued for the reconnect", topic)
+        elif info.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("could not queue %s: %s", topic, mqtt.error_string(info.rc))
+
     def stop(self) -> None:
         self._client.disconnect()

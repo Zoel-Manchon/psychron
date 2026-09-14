@@ -100,6 +100,30 @@ export type PhoneSample = {
   magnetic_ut: number | null;
   heading_deg: number | null;
   battery_temp_c: number | null;
+  // Revision 2. Full-precision coordinates reach an authenticated session only,
+  // and the panel never prints them.
+  lat: number | null;
+  lon: number | null;
+  loc_acc_m: number | null;
+  alt_msl_m: number | null;
+  alt_acc_m: number | null;
+  speed_ms: number | null;
+  noise_laeq_dbfs: number | null;
+  noise_lamax_dbfs: number | null;
+  noise_l10_dbfs: number | null;
+  noise_l90_dbfs: number | null;
+  cell_rat: "lte" | "nr" | null;
+  cell_rsrp_dbm: number | null;
+  cell_rsrq_db: number | null;
+  cell_sinr_db: number | null;
+  cell_band: number | null;
+  net_via: "wifi" | "cell" | "ethernet" | "other" | null;
+  net_vpn: boolean | null;
+  net_rtt_ms: number | null;
+};
+
+export type Outlook = {
+  number: number; trend: "falling" | "steady" | "rising"; text: string; method: string;
 };
 
 export type PhoneCurrent = PhoneSample & {
@@ -107,6 +131,16 @@ export type PhoneCurrent = PhoneSample & {
   // Null when no pressure was recorded near three hours ago: a tendency against
   // whatever reading happened to be closest would invent a trend.
   pressure_tendency_3h_hpa: number | null;
+  altitude_m: number | null;
+  altitude_source: "gnss" | "configured" | null;
+  sea_level_pressure_hpa: number | null;
+  outlook: Outlook | null;
+  // Present only once a calibration offset has been measured and configured.
+  spl_offset_db: number | null;
+  noise_laeq_dba: number | null;
+  noise_lamax_dba: number | null;
+  noise_l10_dba: number | null;
+  noise_l90_dba: number | null;
 };
 
 export type PhonePoint = { t: string } & Omit<PhoneSample, "time" | "window_ms" | "firmware" | "quality_flags">;
@@ -114,6 +148,16 @@ export type PhonePoint = { t: string } & Omit<PhoneSample, "time" | "window_ms" 
 export type PhoneSeries = {
   from: string; to: string; bucket: string;
   count: number; truncated: boolean; max_points: number; points: PhonePoint[];
+};
+
+export type PhoneEvent = {
+  time: string; kind: "vibration"; duration_ms: number; pga_ms2: number;
+  sta_lta: number; freq_hz: number | null; quality_flags: string[];
+};
+
+export type AlertEpisode = {
+  kind: string; device_id: string; raised_at: string; cleared_at: string | null;
+  value: number; threshold: number; message: string;
 };
 
 export const api = {
@@ -124,6 +168,9 @@ export const api = {
   device: () => get<Device>("/api/device"),
   phoneCurrent: () => get<PhoneCurrent>("/api/phone/current"),
   phoneSeries: (from: string) => get<PhoneSeries>("/api/phone/series", { from }),
+  phoneEvents: (from: string) =>
+    get<{ count: number; events: PhoneEvent[] }>("/api/phone/events", { from }),
+  alerts: () => get<{ open: AlertEpisode[]; recent: AlertEpisode[] }>("/api/alerts"),
   exportUrl: (format: string, from: string) =>
     `/api/export?format=${format}&from=${encodeURIComponent(from)}`,
 };

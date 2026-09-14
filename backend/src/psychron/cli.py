@@ -6,12 +6,15 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .adapters.alerts_pg import PostgresAlertStore
 from .adapters.mqtt import MqttTelemetrySource
 from .adapters.postgres import PostgresReadingRepository
+from .alerting import Alerter
 from .ingest import Ingestor
 
 # On the host the file sits beside the compose stack it configures. In a
@@ -129,9 +132,28 @@ def cmd_run(args) -> int:
     def on_message(topic, payload, received_at):
         ingestor.handle(topic, payload, received_at)
         s = ingestor.stats
-        if (s.stored + s.samples + s.duplicates + s.rejected) % 20 == 0:
-            logging.info("stored=%d samples=%d duplicates=%d rejected=%d boots=%d",
-                         s.stored, s.samples, s.duplicates, s.rejected, s.boots)
+        if (s.stored + s.samples + s.events + s.duplicates + s.rejected) % 20 == 0:
+            logging.info("stored=%d samples=%d events=%d duplicates=%d rejected=%d boots=%d",
+                         s.stored, s.samples, s.events, s.duplicates, s.rejected, s.boots)
+
+    # Alerts run beside ingestion rather than as a service of their own: this
+    # process already holds the database and the one broker connection allowed to
+    # publish to psychron/alerts/, and a second process would need both again.
+    alerts = PostgresAlertStore(dsn_from(env), esp32=args.device,
+                                phone=env.get("PSYCHRON_PHONE_DEVICE", "phone-01"))
+    alerter = Alerter(alerts, source)
+    stop = threading.Event()
+
+    def alert_loop() -> None:
+        # Offset from the start so the first pass sees a connected broker, then
+        # every 30 s: alerts are about minutes and hours, not seconds.
+        while not stop.wait(30.0):
+            try:
+                alerter.tick()
+            except Exception:  # noqa: BLE001 — a bad pass must not end the loop
+                logging.exception("alert evaluation failed; retrying next pass")
+
+    threading.Thread(target=alert_loop, name="alerts", daemon=True).start()
 
     try:
         source.run(on_message)
@@ -140,7 +162,9 @@ def cmd_run(args) -> int:
         logging.info("stopped: stored=%d duplicates=%d rejected=%d",
                      ingestor.stats.stored, ingestor.stats.duplicates, ingestor.stats.rejected)
     finally:
+        stop.set()
         repo.close()
+        alerts.close()
     return 0
 
 

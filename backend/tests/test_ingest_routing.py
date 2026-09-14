@@ -16,7 +16,15 @@ TS = int(T0.timestamp())
 
 class MemoryRepo:
     def __init__(self):
-        self.readings, self.samples, self.rejected = [], [], []
+        self.readings, self.samples, self.events, self.rejected = [], [], [], []
+
+    def store_event(self, event):
+        m = event.message
+        key = (m.device_id, m.boot_id, m.seq)
+        if any((e.message.device_id, e.message.boot_id, e.message.seq) == key for e in self.events):
+            return False
+        self.events.append(event)
+        return True
 
     def store(self, reading):
         key = (reading.device_id, reading.boot_id, reading.seq)
@@ -53,6 +61,13 @@ def v2(**over):
     base = {"v": 2, "dev": "phone-01", "fw": "0.1.0", "boot": 9, "seq": 1,
             "ts": TS, "up": 2000, "win": 2000, "q": 0,
             "baro": {"hpa": 1012.8}, "batt": {"c": 30.1}}
+    base.update(over)
+    return json.dumps(base).encode()
+
+
+def event(**over):
+    base = {"v": 2, "dev": "phone-01", "fw": "android-0.5.0", "boot": 9, "seq": 1,
+            "ts": TS, "up": 2500, "q": 0, "kind": "vibration", "dur": 900, "pga": 0.3, "ratio": 5.0}
     base.update(over)
     return json.dumps(base).encode()
 
@@ -108,6 +123,27 @@ def test_a_redelivered_sample_is_a_duplicate():
     ing.handle("psychron/v2/phone-01/sample", v2(), T0)
     assert len(repo.samples) == 1
     assert ing.stats.samples == 1 and ing.stats.duplicates == 1
+
+
+def test_events_land_in_their_own_table():
+    repo, ing = ingest("psychron/v2/phone-01/event", event())
+    assert len(repo.events) == 1 and not repo.samples and not repo.rejected
+    assert ing.stats.events == 1
+
+
+def test_a_sample_on_the_event_topic_is_rejected_not_stored():
+    repo, _ = ingest("psychron/v2/phone-01/event", v2())
+    assert not repo.events and not repo.samples
+    assert "kind must be one of" in repo.rejected[0][1]
+
+
+def test_an_event_and_a_sample_may_share_a_sequence_number():
+    # Separate counters on the node, separate identities here.
+    repo = MemoryRepo()
+    ing = Ingestor(repo)
+    ing.handle("psychron/v2/phone-01/sample", v2(seq=3), T0)
+    ing.handle("psychron/v2/phone-01/event", event(seq=3), T0)
+    assert len(repo.samples) == 1 and len(repo.events) == 1 and ing.stats.duplicates == 0
 
 
 def test_readings_and_samples_share_a_boot_anchor_table_without_colliding():

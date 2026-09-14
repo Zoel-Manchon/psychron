@@ -13,8 +13,13 @@ topic write psychron/v1/esp32-01/#
 # write under another device's name could impersonate it.
 user phone-01
 topic write psychron/v2/phone-01/#
+# Alerts flow the other way. Read only: a phone that could publish here could
+# raise a storm warning nobody's barometer measured, or clear a real one.
+topic read psychron/alerts/#
 
-# The ingestion service reads everything and writes nothing.
+# The ingestion service reads all telemetry, and the only thing it writes is
+# the alerts it derives from it.
 user ingest
 topic read psychron/v1/#
 topic read psychron/v2/#
+topic write psychron/alerts/#

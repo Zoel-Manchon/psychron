@@ -19,7 +19,7 @@ export type Trace = {
   dash?: number[];
 };
 
-type Row = { t: string } & Record<string, number | string | null>;
+type Row = { t: string } & Record<string, number | string | boolean | null>;
 
 type Props = {
   points: Row[];

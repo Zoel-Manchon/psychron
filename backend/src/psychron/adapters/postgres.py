@@ -10,6 +10,7 @@ from psycopg.rows import tuple_row
 
 from dataclasses import fields
 
+from ..domain.events import ResolvedEvent
 from ..domain.samples import Measurements, ResolvedSample
 from ..domain.telemetry import (
     Q_TIME_FROM_ANCHOR,
@@ -91,6 +92,30 @@ class PostgresReadingRepository:
                 f"INSERT INTO sample ({', '.join(columns)}) "
                 f"VALUES ({', '.join(['%s'] * len(columns))}) ON CONFLICT DO NOTHING",
                 values,
+            )
+            return cur.rowcount > 0
+
+    def store_event(self, event: ResolvedEvent) -> bool:
+        # The same identity rule once more, in the event table's own sequence.
+        m = event.message
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM event WHERE device_id = %s AND boot_id = %s AND seq = %s LIMIT 1",
+                (m.device_id, m.boot_id, m.seq),
+            )
+            if cur.fetchone() is not None:
+                return False
+            cur.execute(
+                """
+                INSERT INTO event (time, device_id, boot_id, seq, device_time, received_at,
+                                   uptime_ms, quality, firmware, kind, duration_ms, pga_ms2,
+                                   sta_lta, freq_hz)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (event.time, m.device_id, m.boot_id, m.seq, m.device_time, event.received_at,
+                 m.uptime_ms, event.quality, m.firmware, m.kind, m.duration_ms, m.pga_ms2,
+                 m.sta_lta, m.freq_hz),
             )
             return cur.rowcount > 0
 

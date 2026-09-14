@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from ..adapters.identity_pg import PostgresIdentity
 from ..adapters.queries import MAX_POINTS, ReadQueries
-from ..domain import psychrometrics
+from ..domain import psychrometrics, weather
 from .auth import (Principal, TokenAuthenticator, ensure_token, require_principal,
                    set_authenticator, set_identity)
 from .routes_auth import SESSION_COOKIE, build_router
@@ -61,7 +61,9 @@ def parse_range(frm: str | None, to: str | None) -> tuple[datetime, datetime]:
 
 
 def create_app(dsn: str, env_path, device_id: str = "esp32-01",
-               phone_device_id: str = "phone-01") -> FastAPI:
+               phone_device_id: str = "phone-01",
+               station_elevation_m: float | None = None,
+               spl_offset_db: float | None = None) -> FastAPI:
     set_authenticator(TokenAuthenticator(ensure_token(env_path)))
     identity = PostgresIdentity(dsn)
     set_identity(identity)
@@ -310,9 +312,61 @@ def create_app(dsn: str, env_path, device_id: str = "esp32-01",
         tendency = None
         if row["pressure_hpa"] is not None:
             tendency = queries.pressure_tendency(phone_device_id, row["pressure_hpa"], row["time"])
+
+        # Sea level needs an altitude, and the phone's own GNSS is preferred to a
+        # configured one because the phone may not be where it was configured.
+        altitude, source = queries.recent_altitude(phone_device_id, row["time"]), "gnss"
+        if altitude is None and station_elevation_m is not None:
+            altitude, source = station_elevation_m, "configured"
+        sea_level = outlook = None
+        if row["pressure_hpa"] is not None and altitude is not None:
+            sea_level = weather.sea_level_pressure(row["pressure_hpa"], altitude)
+            if tendency is not None:
+                # A tendency at the station is the same tendency at sea level: the
+                # reduction is a near-constant factor over three hours.
+                outlook = weather.zambretti(sea_level, tendency)
+
         return {"device": phone_device_id,
                 **_sample_payload(row),
-                "pressure_tendency_3h_hpa": tendency}
+                "pressure_tendency_3h_hpa": tendency,
+                "altitude_m": altitude,
+                "altitude_source": source if altitude is not None else None,
+                "sea_level_pressure_hpa": sea_level,
+                "outlook": None if outlook is None else {
+                    "number": outlook.number, "trend": outlook.trend, "text": outlook.text,
+                    "method": "Zambretti"},
+                **_calibrated_noise(row)}
+
+    def _calibrated_noise(row: dict) -> dict:
+        # Only with a measured offset, and under names that say so. Without one the
+        # levels stay relative, which the panel labels, rather than acquiring a unit
+        # nothing has earned.
+        names = ("noise_laeq_dbfs", "noise_lamax_dbfs", "noise_l10_dbfs", "noise_l90_dbfs")
+        return {"spl_offset_db": spl_offset_db,
+                **{n.replace("_dbfs", "_dba"): (None if spl_offset_db is None or row[n] is None
+                                                else row[n] + spl_offset_db) for n in names}}
+
+    @app.get("/api/phone/events")
+    def phone_events(frm: str | None = Query(None, alias="from"),
+                     to: str | None = None,
+                     _: Principal = Depends(require_principal)) -> dict:
+        start, end = parse_range(frm, to)
+        rows = queries.events(phone_device_id, start, end)
+        out = []
+        for r in rows:
+            quality = r.pop("quality")
+            out.append({**r, "time": _utc(r["time"]), "quality_flags": describe_quality(quality)})
+        return {"from": start, "to": end, "count": len(out), "events": out}
+
+    @app.get("/api/alerts")
+    def alerts(_: Principal = Depends(require_principal)) -> dict:
+        found = queries.alerts()
+
+        def row(a: dict) -> dict:
+            return {**a, "raised_at": _utc(a["raised_at"]),
+                    "cleared_at": None if a["cleared_at"] is None else _utc(a["cleared_at"])}
+
+        return {"open": [row(a) for a in found["open"]], "recent": [row(a) for a in found["recent"]]}
 
     @app.get("/api/phone/series")
     def phone_series(frm: str | None = Query(None, alias="from"),

@@ -87,6 +87,36 @@ assert deny  "phone certificate on the ESP32's topic"        -t "$MINE"  --cert 
 assert deny  "ESP32 certificate on the phone's topic"        -t "$PHONE" --cert "$C/esp32-01.crt" --key "$C/esp32-01.key"
 
 echo
+echo "alerts flow one way, from ingestion to the phone:"
+ALERT="psychron/alerts/probe/check"
+assert allow "ingestion publishing an alert"                -t "$ALERT" --cert "$C/ingest.crt" --key "$C/ingest.key"
+assert deny  "phone publishing an alert"                    -t "$ALERT" --cert "$C/phone-01.crt" --key "$C/phone-01.key"
+assert deny  "ESP32 publishing an alert"                    -t "$ALERT" --cert "$C/esp32-01.crt" --key "$C/esp32-01.key"
+
+# Reading is the other half. A retained probe, so a subscriber that is allowed to
+# read receives it at once and one that is not receives nothing before -W gives up.
+# Cleared afterwards: a real phone subscribes to the same tree.
+docker compose exec -T broker mosquitto_pub -h localhost -p 8883 -V 5 -q 1 -r -t "$ALERT" \
+  -m '{"probe":2}' --cafile "$C/ca.crt" --cert "$C/ingest.crt" --key "$C/ingest.key" >/dev/null 2>&1
+receives() {
+  docker compose exec -T broker mosquitto_sub -h localhost -p 8883 -V 5 -t "$ALERT" -C 1 -W 3 \
+    --cafile "$C/ca.crt" --cert "$C/$1.crt" --key "$C/$1.key" 2>/dev/null | grep -q '"probe":2'
+}
+for who in "allow phone-01 phone subscribing to alerts" "deny esp32-01 ESP32 subscribing to alerts"; do
+  set -- $who
+  expect=$1 cert=$2; shift 2
+  if receives "$cert"; then got=allow; else got=deny; fi
+  if [ "$got" = "$expect" ]; then
+    printf '  OK    %-46s %s\n' "$*" "$got"
+  else
+    printf '  FAIL  %-46s expected %s, got %s\n' "$*" "$expect" "$got"
+    fails=$((fails + 1))
+  fi
+done
+docker compose exec -T broker mosquitto_pub -h localhost -p 8883 -V 5 -q 1 -r -n -t "$ALERT" \
+  --cafile "$C/ca.crt" --cert "$C/ingest.crt" --key "$C/ingest.key" >/dev/null 2>&1
+
+echo
 echo "the plaintext listener is gone:"
 # A regression test, not a formality. Plaintext coming back is the failure that
 # would go unnoticed for months, because everything keeps working.

@@ -103,9 +103,48 @@ class ReadQueries:
 
     # ── phone node (contract v2) ────────────────────────────────────────────
 
-    SAMPLE_COLUMNS = ("pressure_hpa", "illuminance_lux", "sound_rms_dbfs", "sound_peak_dbfs",
-                      "accel_rms", "accel_peak", "gyro_rms", "gyro_peak",
-                      "magnetic_ut", "heading_deg", "battery_temp_c")
+    # How each column becomes one value per bucket, in contract order. Most are a
+    # mean and every peak is a maximum, with four exceptions that each have a
+    # reason: heading is averaged on the circle (the mean of 359° and 1° is 180°,
+    # pointing exactly the wrong way); LAeq is averaged as energy (two seconds at
+    # -40 and two at -80 are -43 dB, not -60); and the technology, band and
+    # transport are categories, so a bucket takes the most frequent one.
+    #
+    # The modulo is a doubled percent sign because these strings go through
+    # psycopg's placeholder parser, which reads a single one as a parameter.
+    _BUCKET = {
+        "pressure_hpa": "avg(pressure_hpa)::float8",
+        "illuminance_lux": "avg(illuminance_lux)::float8",
+        "sound_rms_dbfs": "avg(sound_rms_dbfs)::float8",
+        "sound_peak_dbfs": "max(sound_peak_dbfs)::float8",
+        "accel_rms": "avg(accel_rms)::float8",
+        "accel_peak": "max(accel_peak)::float8",
+        "gyro_rms": "avg(gyro_rms)::float8",
+        "gyro_peak": "max(gyro_peak)::float8",
+        "magnetic_ut": "avg(magnetic_ut)::float8",
+        "heading_deg": "(degrees(atan2(avg(sin(radians(heading_deg))),"
+                       " avg(cos(radians(heading_deg))))) + 360)::numeric %% 360",
+        "battery_temp_c": "avg(battery_temp_c)::float8",
+        "lat": "avg(lat)::float8",
+        "lon": "avg(lon)::float8",
+        "loc_acc_m": "avg(loc_acc_m)::float8",
+        "alt_msl_m": "avg(alt_msl_m)::float8",
+        "alt_acc_m": "avg(alt_acc_m)::float8",
+        "speed_ms": "avg(speed_ms)::float8",
+        "noise_laeq_dbfs": "(10 * log(avg(power(10::float8, noise_laeq_dbfs / 10))))::float8",
+        "noise_lamax_dbfs": "max(noise_lamax_dbfs)::float8",
+        "noise_l10_dbfs": "avg(noise_l10_dbfs)::float8",
+        "noise_l90_dbfs": "avg(noise_l90_dbfs)::float8",
+        "cell_rat": "mode() WITHIN GROUP (ORDER BY cell_rat)",
+        "cell_rsrp_dbm": "avg(cell_rsrp_dbm)::float8",
+        "cell_rsrq_db": "avg(cell_rsrq_db)::float8",
+        "cell_sinr_db": "avg(cell_sinr_db)::float8",
+        "cell_band": "mode() WITHIN GROUP (ORDER BY cell_band)",
+        "net_via": "mode() WITHIN GROUP (ORDER BY net_via)",
+        "net_vpn": "bool_or(net_vpn)",
+        "net_rtt_ms": "avg(net_rtt_ms)::float8",
+    }
+    SAMPLE_COLUMNS = tuple(_BUCKET)
 
     def sample_latest(self, device_id: str) -> dict | None:
         with self._pool.connection() as conn, conn.cursor() as cur:
@@ -172,29 +211,10 @@ class ReadQueries:
             """
             params: tuple = (device_id, start, end, MAX_POINTS + 1)
         else:
-            # Peaks take the maximum of the bucket and everything else the mean,
-            # except heading. The mean of 359° and 1° is 180°, pointing exactly
-            # the wrong way, so heading is averaged on the circle instead.
-            #
-            # The modulo is written as a doubled percent sign because this string
-            # goes through psycopg's placeholder parser, which reads a single one
-            # as the start of a parameter. It parses SQL comments too, so this
-            # explanation has to live out here rather than next to the operator.
-            sql = """
+            select = ",\n".join(f"{expr} AS {column}" for column, expr in self._BUCKET.items())
+            sql = f"""
                 SELECT time_bucket(%s::interval, time) AS t,
-                       avg(pressure_hpa)::float8    AS pressure_hpa,
-                       avg(illuminance_lux)::float8 AS illuminance_lux,
-                       avg(sound_rms_dbfs)::float8  AS sound_rms_dbfs,
-                       max(sound_peak_dbfs)::float8 AS sound_peak_dbfs,
-                       avg(accel_rms)::float8       AS accel_rms,
-                       max(accel_peak)::float8      AS accel_peak,
-                       avg(gyro_rms)::float8        AS gyro_rms,
-                       max(gyro_peak)::float8       AS gyro_peak,
-                       avg(magnetic_ut)::float8     AS magnetic_ut,
-                       (degrees(atan2(avg(sin(radians(heading_deg))),
-                                      avg(cos(radians(heading_deg))))) + 360)::numeric
-                           %% 360                   AS heading_deg,
-                       avg(battery_temp_c)::float8  AS battery_temp_c
+                {select}
                 FROM sample
                 WHERE device_id = %s AND time >= %s AND time < %s
                 GROUP BY 1 ORDER BY 1 LIMIT %s
@@ -209,6 +229,55 @@ class ReadQueries:
                 row["heading_deg"] = float(row["heading_deg"])
         truncated = len(rows) > MAX_POINTS
         return Series(bucket=label, points=rows[:MAX_POINTS], truncated=truncated)
+
+    def recent_altitude(self, device_id: str, at: datetime) -> float | None:
+        """The phone's altitude above sea level, if its GNSS has been sure of it.
+
+        The median of the last ten minutes of fixes that claim a vertical accuracy
+        of 20 m or better, and only with at least five of them: a single fix
+        indoors can be a hundred metres out, and reducing pressure with it would
+        move the sea-level figure by twelve hectopascals.
+        """
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY alt_msl_m) AS alt, count(*) AS n
+                FROM sample
+                WHERE device_id = %s AND time BETWEEN %s AND %s
+                  AND alt_msl_m IS NOT NULL AND alt_acc_m <= 20
+                """,
+                (device_id, at - timedelta(minutes=10), at),
+            )
+            row = cur.fetchone()
+        return row["alt"] if row and row["n"] >= 5 else None
+
+    def events(self, device_id: str, start: datetime, end: datetime, limit: int = 500) -> list[dict]:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT time, kind, duration_ms, pga_ms2, sta_lta, freq_hz, quality
+                FROM event
+                WHERE device_id = %s AND time >= %s AND time < %s
+                ORDER BY time DESC LIMIT %s
+                """,
+                (device_id, start, end, limit),
+            )
+            return cur.fetchall()
+
+    def alerts(self, recent: int = 20) -> dict:
+        """Every open episode, and the most recent ones that have ended."""
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT kind, device_id, raised_at, cleared_at, value, threshold, message "
+                "FROM alert WHERE cleared_at IS NULL ORDER BY raised_at DESC"
+            )
+            open_ = cur.fetchall()
+            cur.execute(
+                "SELECT kind, device_id, raised_at, cleared_at, value, threshold, message "
+                "FROM alert WHERE cleared_at IS NOT NULL ORDER BY raised_at DESC LIMIT %s",
+                (recent,),
+            )
+            return {"open": open_, "recent": cur.fetchall()}
 
     # ── statistics ──────────────────────────────────────────────────────────
 

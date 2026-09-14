@@ -9,7 +9,7 @@ import { SecondFactor } from "./auth/SecondFactor";
 import { SignIn } from "./auth/SignIn";
 import {
   ApiError, RANGES, api, auth, hoursFromSlug, openLive, rangeSlug, since,
-  type AuthState, type Challenge, type Current, type Device, type Health,
+  type AlertEpisode, type AuthState, type Challenge, type Current, type Device, type Health,
   type Series, type Stats,
 } from "./api";
 
@@ -88,6 +88,7 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [device, setDevice] = useState<Device | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [alerts, setAlerts] = useState<AlertEpisode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [refreshes, setRefreshes] = useState(0);
@@ -137,6 +138,16 @@ export default function App() {
     const id = setInterval(tick, 5000);
     return () => clearInterval(id);
   }, []);
+
+  // The evaluator runs every 30 s, so polling faster would only re-read the same
+  // answer. Failures leave the last known state rather than blanking it.
+  useEffect(() => {
+    if (!who) return;
+    const tick = () => api.alerts().then((a) => setAlerts(a.open)).catch(() => undefined);
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, [who]);
 
   useEffect(() => {
     if (!who) return;
@@ -262,6 +273,17 @@ export default function App() {
       </div>
 
       {error && <p className="mono-note accent" style={{ marginTop: 10 }}>{error}</p>}
+
+      {alerts.map((a) => (
+        <div className="alert-band" key={`${a.kind}-${a.device_id}`} role="status">
+          <strong>{a.message}</strong>
+          <span className="mono-note">
+            {a.device_id} · since {new Date(a.raised_at).toLocaleString("en-GB",
+              { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {" · "}also sent to the phone
+          </span>
+        </div>
+      ))}
 
       {/* ── now ──────────────────────────────────────────────────────────── */}
       <div className="band band-first">
