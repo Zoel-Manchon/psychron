@@ -77,6 +77,16 @@ assert deny  "forged CN=esp32-01 from a foreign CA" \
        -t "$MINE"   --cert "$C/rogue.crt" --key "$C/rogue.key"
 
 echo
+echo "the phone node is fenced to its own contract and subtree:"
+# Four ways the two devices could be confused with each other. Each one is a
+# different mistake in the ACL, so each gets its own assertion.
+PHONE="psychron/v2/phone-01/probe"
+assert allow "phone certificate on its own v2 topic"        -t "$PHONE" --cert "$C/phone-01.crt" --key "$C/phone-01.key"
+assert deny  "phone certificate writing under v1"        -t "psychron/v1/phone-01/probe" --cert "$C/phone-01.crt" --key "$C/phone-01.key"
+assert deny  "phone certificate on the ESP32's topic"        -t "$MINE"  --cert "$C/phone-01.crt" --key "$C/phone-01.key"
+assert deny  "ESP32 certificate on the phone's topic"        -t "$PHONE" --cert "$C/esp32-01.crt" --key "$C/esp32-01.key"
+
+echo
 echo "the plaintext listener is gone:"
 # A regression test, not a formality. Plaintext coming back is the failure that
 # would go unnoticed for months, because everything keeps working.

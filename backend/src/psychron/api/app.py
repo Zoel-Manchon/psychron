@@ -60,7 +60,8 @@ def parse_range(frm: str | None, to: str | None) -> tuple[datetime, datetime]:
     return start, end
 
 
-def create_app(dsn: str, env_path, device_id: str = "esp32-01") -> FastAPI:
+def create_app(dsn: str, env_path, device_id: str = "esp32-01",
+               phone_device_id: str = "phone-01") -> FastAPI:
     set_authenticator(TokenAuthenticator(ensure_token(env_path)))
     identity = PostgresIdentity(dsn)
     set_identity(identity)
@@ -83,12 +84,19 @@ def create_app(dsn: str, env_path, device_id: str = "esp32-01") -> FastAPI:
         age = None
         if latest:
             age = (datetime.now(timezone.utc) - latest["time"]).total_seconds()
+        phone = queries.sample_latest(phone_device_id)
+        phone_age = None
+        if phone:
+            phone_age = (datetime.now(timezone.utc) - phone["time"]).total_seconds()
         return {
             "status": "ok",
             "device": device_id,
             "last_reading_age_s": age,
             # A node is not "up" because the service is: say so separately.
             "device_reporting": age is not None and age < 30,
+            "phone": phone_device_id,
+            "last_sample_age_s": phone_age,
+            "phone_reporting": phone_age is not None and phone_age < 30,
         }
 
     @app.get("/api/current")
@@ -265,22 +273,74 @@ def create_app(dsn: str, env_path, device_id: str = "esp32-01") -> FastAPI:
 
     # ── live ────────────────────────────────────────────────────────────────
 
-    @app.websocket("/api/live")
-    async def live(ws: WebSocket) -> None:
-        # The token arrives as a query parameter because a browser WebSocket
-        # cannot set headers. It is the same secret either way, but it does end
-        # up in URLs, so it is worth knowing rather than glossing over.
+    def _socket_allowed(ws: WebSocket) -> bool:
         # Cookies travel with the WebSocket handshake, so a browser needs no
         # token in the URL — which is where the old scheme leaked it into logs
         # and history. The query parameter remains only for scripted clients.
+        # One function for every socket: two copies of an admission check are
+        # two chances for one of them to be wrong.
         cookie = ws.cookies.get(SESSION_COOKIE)
-        allowed = bool(cookie) and identity.session_principal(cookie) is not None
-        if not allowed:
-            from .auth import _authenticator
-            token = ws.query_params.get("token", "")
-            allowed = (_authenticator is not None
-                       and _authenticator.authenticate(f"Bearer {token}") is not None)
-        if not allowed:
+        if cookie and identity.session_principal(cookie) is not None:
+            return True
+        from .auth import _authenticator
+        token = ws.query_params.get("token", "")
+        return (_authenticator is not None
+                and _authenticator.authenticate(f"Bearer {token}") is not None)
+
+    def _sample_payload(row: dict) -> dict:
+        out = {"time": row["time"].isoformat(),
+               "window_ms": row["window_ms"],
+               "firmware": row["firmware"],
+               "quality_flags": describe_quality(row["quality"])}
+        for column in ReadQueries.SAMPLE_COLUMNS:
+            out[column] = row[column]
+        return out
+
+    @app.get("/api/phone/current")
+    def phone_current(_: Principal = Depends(require_principal)) -> dict:
+        row = queries.sample_latest(phone_device_id)
+        if row is None:
+            raise HTTPException(404, "no samples stored yet")
+        tendency = None
+        if row["pressure_hpa"] is not None:
+            tendency = queries.pressure_tendency(phone_device_id, row["pressure_hpa"], row["time"])
+        return {"device": phone_device_id,
+                **_sample_payload(row),
+                "pressure_tendency_3h_hpa": tendency}
+
+    @app.get("/api/phone/series")
+    def phone_series(frm: str | None = Query(None, alias="from"),
+                     to: str | None = None,
+                     _: Principal = Depends(require_principal)) -> dict:
+        start, end = parse_range(frm, to)
+        series = queries.sample_series(phone_device_id, start, end)
+        return {"from": start, "to": end, "bucket": series.bucket,
+                "count": len(series.points), "truncated": series.truncated,
+                "max_points": MAX_POINTS, "points": series.points}
+
+    @app.websocket("/api/live/phone")
+    async def live_phone(ws: WebSocket) -> None:
+        if not _socket_allowed(ws):
+            await ws.close(code=4401)
+            return
+        await ws.accept()
+        last_seen: datetime | None = None
+        try:
+            while True:
+                row = await asyncio.to_thread(queries.sample_latest, phone_device_id)
+                if row and row["time"] != last_seen:
+                    last_seen = row["time"]
+                    await ws.send_json(_sample_payload(row))
+                # Half the node's window: often enough that a gesture in front of
+                # the phone shows up without a visible lag, rarely enough that an
+                # idle panel is not a query storm.
+                await asyncio.sleep(1.0)
+        except WebSocketDisconnect:
+            pass
+
+    @app.websocket("/api/live")
+    async def live(ws: WebSocket) -> None:
+        if not _socket_allowed(ws):
             await ws.close(code=4401)
             return
 

@@ -8,6 +8,9 @@ from typing import Iterable
 import psycopg
 from psycopg.rows import tuple_row
 
+from dataclasses import fields
+
+from ..domain.samples import Measurements, ResolvedSample
 from ..domain.telemetry import (
     Q_TIME_FROM_ANCHOR,
     Q_TIME_FROM_ARRIVAL,
@@ -17,6 +20,10 @@ from ..domain.telemetry import (
 # Bits that mean the instant was inferred rather than measured. A reading with
 # either one set is not a safe basis for anchoring a boot.
 _INFERRED = Q_TIME_FROM_ANCHOR | Q_TIME_FROM_ARRIVAL
+
+# Taken from the dataclass rather than written out, so a quantity added to the
+# contract cannot be validated on the wire and then quietly missing from INSERT.
+_MEASUREMENT_COLUMNS = [f.name for f in fields(Measurements)]
 
 
 class PostgresReadingRepository:
@@ -62,6 +69,31 @@ class PostgresReadingRepository:
             )
             return cur.rowcount > 0
 
+    def store_sample(self, sample: ResolvedSample) -> bool:
+        # Same reasoning as store(): the identity is (device, boot, seq), and the
+        # unique index cannot say so alone because it has to include time.
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM sample WHERE device_id = %s AND boot_id = %s AND seq = %s LIMIT 1",
+                (sample.device_id, sample.boot_id, sample.seq),
+            )
+            if cur.fetchone() is not None:
+                return False
+
+            envelope = ["time", "device_id", "boot_id", "seq", "device_time",
+                        "received_at", "uptime_ms", "window_ms", "quality", "firmware"]
+            columns = envelope + _MEASUREMENT_COLUMNS
+            values = [sample.time, sample.device_id, sample.boot_id, sample.seq,
+                      sample.device_time, sample.received_at, sample.uptime_ms,
+                      sample.window_ms, sample.quality, sample.firmware]
+            values += [getattr(sample.measurements, c) for c in _MEASUREMENT_COLUMNS]
+            cur.execute(
+                f"INSERT INTO sample ({', '.join(columns)}) "
+                f"VALUES ({', '.join(['%s'] * len(columns))}) ON CONFLICT DO NOTHING",
+                values,
+            )
+            return cur.rowcount > 0
+
     def store_rejected(self, topic: str, payload: bytes, reason: str,
                        device_id: str | None) -> None:
         with self._conn.cursor() as cur:
@@ -87,7 +119,14 @@ class PostgresReadingRepository:
                 SELECT DISTINCT ON (device_id, boot_id)
                        device_id, boot_id,
                        time - make_interval(secs => uptime_ms / 1000.0)
-                FROM reading
+                FROM (
+                    -- Both contracts anchor boots the same way, so a restart
+                    -- must reload anchors from both; otherwise a phone window
+                    -- replayed after ingestion restarts lands on arrival time.
+                    SELECT device_id, boot_id, time, uptime_ms, device_time, quality FROM reading
+                    UNION ALL
+                    SELECT device_id, boot_id, time, uptime_ms, device_time, quality FROM sample
+                ) observed
                 WHERE device_time IS NOT NULL AND (quality & %s) = 0
                 ORDER BY device_id, boot_id, time ASC
                 """,

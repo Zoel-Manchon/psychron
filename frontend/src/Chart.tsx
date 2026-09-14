@@ -12,8 +12,15 @@ type Props = { points: Point[]; bucket: string; theme?: string };
 
 export type Gap = { from: number; to: number };
 
-const secondsPerBucket = (bucket: string) =>
-  bucket === "3s" ? 3 : bucket === "1m" ? 60 : bucket === "1h" ? 3600 : 86400;
+// Parsed from the label rather than looked up, because the two nodes use
+// different ladders: "3s" and "1m" for the ESP32, "2s", "30s" and "2m" for the
+// phone. A lookup table that knew only the first set would treat every phone
+// bucket as a day and never find a gap in it.
+export const secondsPerBucket = (bucket: string): number => {
+  const m = /^(\d+)\s*([smhd])$/.exec(bucket.trim());
+  if (!m) return 86400;
+  return Number(m[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[m[2] as "s" | "m" | "h" | "d"];
+};
 
 /** Stretches of the window where no reading exists, in epoch seconds.
  *
@@ -22,7 +29,7 @@ const secondsPerBucket = (bucket: string) =>
  * and the one thing this panel promises is that an outage is never smoothed
  * over — a claim that has to be made by one piece of code, not two.
  */
-export function findGaps(points: Point[], bucket: string): Gap[] {
+export function findGaps(points: { t: string }[], bucket: string): Gap[] {
   const expected = secondsPerBucket(bucket);
   const gaps: Gap[] = [];
   let prev: number | null = null;
@@ -34,6 +41,40 @@ export function findGaps(points: Point[], bucket: string): Gap[] {
     prev = t;
   }
   return gaps;
+}
+
+export const palette = (name: string) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/** uPlot draw hook that marks each gap on the plot's own canvas.
+ *
+ * Drawn there rather than beside the chart, so the marks share its time axis by
+ * construction: a separate element underneath would have to reproduce uPlot's
+ * axis widths and fall out of alignment on the first layout change nobody
+ * thought about. Shared by every chart, because "what a gap looks like" is one
+ * decision, not one per node.
+ */
+export function drawGaps(gaps: Gap[], ink: (name: string) => string) {
+  return (u: uPlot) => {
+    if (gaps.length === 0) return;
+    const ctx = u.ctx;
+    const { top, height } = u.bbox;
+    const strip = 5 * devicePixelRatio;
+    ctx.save();
+    for (const g of gaps) {
+      const x0 = u.valToPos(g.from, "x", true);
+      const x1 = u.valToPos(g.to, "x", true);
+      const w = Math.max(1.5 * devicePixelRatio, x1 - x0);
+      // A faint band across the plot says where the record is silent; the solid
+      // mark above the axis stays visible when the band is a hairline, which is
+      // what a one-minute outage over thirty days is.
+      ctx.fillStyle = ink("--rule-faint");
+      ctx.fillRect(x0, top, w, height);
+      ctx.fillStyle = ink("--ink-2");
+      ctx.fillRect(x0, top + height - strip, w, strip);
+    }
+    ctx.restore();
+  };
 }
 
 export function Chart({ points, bucket, theme }: Props) {
@@ -101,32 +142,7 @@ export function Chart({ points, bucket, theme }: Props) {
         { label: "humidity", scale: "hum", stroke: ink("--cyan"), width: 1.5,
           value: (_u, v) => (v == null ? "—" : v.toFixed(1) + " %") },
       ],
-      hooks: {
-        // Drawn on the plot's own canvas rather than beside it, so the marks
-        // share the chart's time axis by construction. A separate element
-        // underneath would have to reproduce uPlot's axis widths and would fall
-        // out of alignment on the first layout change nobody thought about.
-        draw: [(u) => {
-          if (gaps.length === 0) return;
-          const ctx = u.ctx;
-          const { top, height } = u.bbox;
-          const strip = 5 * devicePixelRatio;
-          ctx.save();
-          for (const g of gaps) {
-            const x0 = u.valToPos(g.from, "x", true);
-            const x1 = u.valToPos(g.to, "x", true);
-            const w = Math.max(1.5 * devicePixelRatio, x1 - x0);
-            // A faint band across the plot says where the record is silent; the
-            // solid mark above the axis stays visible when the band is a
-            // hairline, which is what a one-minute outage over thirty days is.
-            ctx.fillStyle = ink("--rule-faint");
-            ctx.fillRect(x0, top, w, height);
-            ctx.fillStyle = ink("--ink-2");
-            ctx.fillRect(x0, top + height - strip, w, strip);
-          }
-          ctx.restore();
-        }],
-      },
+      hooks: { draw: [drawGaps(gaps, ink)] },
     };
 
     plot.current?.destroy();

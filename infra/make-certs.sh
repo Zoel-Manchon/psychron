@@ -111,6 +111,11 @@ issue_client() {
 
 issue_client esp32-01
 issue_client ingest
+# The Android node. Its key is generated here and copied onto the phone, which is
+# exactly the weakness the ESP32 has too: a device key that has existed outside
+# the device. The next step replaces this with a key born inside StrongBox that
+# never leaves it, and a CSR signed here instead.
+issue_client phone-01
 
 # The firmware server gets a server certificate of its own rather than reusing
 # the broker's: two services on one key means a compromise of either is a

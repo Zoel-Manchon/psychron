@@ -11,12 +11,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable, Protocol
 
+from .domain.samples import ResolvedSample
 from .domain.telemetry import ResolvedReading
 
 
 class ReadingRepository(Protocol):
     def store(self, reading: ResolvedReading) -> bool:
         """Persist a reading. Returns False when it was already there."""
+
+    def store_sample(self, sample: ResolvedSample) -> bool:
+        """Persist a v2 window summary. Returns False when it was already there."""
 
     def store_rejected(self, topic: str, payload: bytes, reason: str,
                        device_id: str | None) -> None:

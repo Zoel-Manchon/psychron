@@ -101,6 +101,115 @@ class ReadQueries:
         truncated = len(rows) > MAX_POINTS
         return Series(bucket=label, points=rows[:MAX_POINTS], truncated=truncated)
 
+    # ── phone node (contract v2) ────────────────────────────────────────────
+
+    SAMPLE_COLUMNS = ("pressure_hpa", "illuminance_lux", "sound_rms_dbfs", "sound_peak_dbfs",
+                      "accel_rms", "accel_peak", "gyro_rms", "gyro_peak",
+                      "magnetic_ut", "heading_deg", "battery_temp_c")
+
+    def sample_latest(self, device_id: str) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT time, received_at, device_time, boot_id, seq, window_ms,
+                       quality, firmware, {", ".join(self.SAMPLE_COLUMNS)}
+                FROM sample WHERE device_id = %s ORDER BY time DESC LIMIT 1
+                """,
+                (device_id,),
+            )
+            return cur.fetchone()
+
+    def pressure_tendency(self, device_id: str, now_hpa: float, at: datetime) -> float | None:
+        """Change in pressure over the last three hours, in hPa.
+
+        Three hours because that is the interval meteorology reports tendency
+        over, which is what makes the number comparable with a forecast's. None
+        when there is no pressure recorded near that instant: a tendency computed
+        against whatever reading happened to be closest would invent a trend.
+        """
+        target = at - timedelta(hours=3)
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT avg(pressure_hpa)::float8 AS hpa
+                FROM sample
+                WHERE device_id = %s AND pressure_hpa IS NOT NULL
+                  AND time BETWEEN %s AND %s
+                """,
+                (device_id, target - timedelta(minutes=10), target + timedelta(minutes=10)),
+            )
+            row = cur.fetchone()
+        return None if not row or row["hpa"] is None else now_hpa - row["hpa"]
+
+    # Computed on the fly with time_bucket rather than from continuous aggregates:
+    # at one window every two seconds the volume does not justify them yet, and
+    # adding them later changes no endpoint.
+    _SAMPLE_LADDER = [
+        (timedelta(hours=1), None, "2s"),
+        (timedelta(hours=12), "30 seconds", "30s"),
+        (timedelta(days=2), "2 minutes", "2m"),
+        (timedelta(days=60), "1 hour", "1h"),
+        (None, "1 day", "1d"),
+    ]
+
+    def sample_series(self, device_id: str, start: datetime, end: datetime) -> Series:
+        span = end - start
+        # With slack. The panel asks for "the last hour" by computing now minus an
+        # hour in the browser; by the time the server measures the span it is an
+        # hour and a few milliseconds, and without slack every preset lands one
+        # tier too coarse. The raw tier would be unreachable from the UI — and the
+        # raw tier is the only one the live feed can append to.
+        slack = timedelta(minutes=5)
+        interval, label = next((i, l) for limit, i, l in self._SAMPLE_LADDER
+                               if limit is None or span <= limit + slack)
+
+        if interval is None:
+            select = "time AS t, " + ", ".join(self.SAMPLE_COLUMNS)
+            sql = f"""
+                SELECT {select} FROM sample
+                WHERE device_id = %s AND time >= %s AND time < %s
+                ORDER BY time LIMIT %s
+            """
+            params: tuple = (device_id, start, end, MAX_POINTS + 1)
+        else:
+            # Peaks take the maximum of the bucket and everything else the mean,
+            # except heading. The mean of 359° and 1° is 180°, pointing exactly
+            # the wrong way, so heading is averaged on the circle instead.
+            #
+            # The modulo is written as a doubled percent sign because this string
+            # goes through psycopg's placeholder parser, which reads a single one
+            # as the start of a parameter. It parses SQL comments too, so this
+            # explanation has to live out here rather than next to the operator.
+            sql = """
+                SELECT time_bucket(%s::interval, time) AS t,
+                       avg(pressure_hpa)::float8    AS pressure_hpa,
+                       avg(illuminance_lux)::float8 AS illuminance_lux,
+                       avg(sound_rms_dbfs)::float8  AS sound_rms_dbfs,
+                       max(sound_peak_dbfs)::float8 AS sound_peak_dbfs,
+                       avg(accel_rms)::float8       AS accel_rms,
+                       max(accel_peak)::float8      AS accel_peak,
+                       avg(gyro_rms)::float8        AS gyro_rms,
+                       max(gyro_peak)::float8       AS gyro_peak,
+                       avg(magnetic_ut)::float8     AS magnetic_ut,
+                       (degrees(atan2(avg(sin(radians(heading_deg))),
+                                      avg(cos(radians(heading_deg))))) + 360)::numeric
+                           %% 360                   AS heading_deg,
+                       avg(battery_temp_c)::float8  AS battery_temp_c
+                FROM sample
+                WHERE device_id = %s AND time >= %s AND time < %s
+                GROUP BY 1 ORDER BY 1 LIMIT %s
+            """
+            params = (interval, device_id, start, end, MAX_POINTS + 1)
+
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        for row in rows:
+            if row.get("heading_deg") is not None:
+                row["heading_deg"] = float(row["heading_deg"])
+        truncated = len(rows) > MAX_POINTS
+        return Series(bucket=label, points=rows[:MAX_POINTS], truncated=truncated)
+
     # ── statistics ──────────────────────────────────────────────────────────
 
     def stats(self, device_id: str, start: datetime, end: datetime) -> dict:

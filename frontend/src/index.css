@@ -195,6 +195,18 @@ input:focus { outline: none; border-bottom: 1px solid var(--accent); }
 .meter { height: 6px; background: var(--fill); border: 1px solid var(--rule-faint); }
 .meter > span { display: block; height: 100%; background: var(--ink-2); }
 
+/* ── phone node ──────────────────────────────────────────────────────────── */
+
+.phone-tiles { display: grid; gap: 22px 26px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.phone-tiles > * { min-width: 0; }
+.phone-charts { display: grid; gap: 22px 26px; margin-top: 22px; }
+@media (min-width: 1080px) { .phone-charts { grid-template-columns: 1fr 1fr 1fr; } }
+
+/* A meter with a scale under it: the fill is the reading, the hairline border is
+   the range, and nothing is coloured by whether the value is good. */
+.meter-scale { margin: 6px 0 2px; }
+.meter-scale > span { background: var(--accent); }
+
 /* uPlot draws its own furniture; these bring it onto the same page. */
 .uplot, .u-wrap { font-family: var(--mono) !important; }
 .u-legend { font-family: var(--mono) !important; font-size: 11px !important; color: var(--ink-2); }

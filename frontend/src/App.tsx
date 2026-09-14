@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Chart, findGaps } from "./Chart";
 import { Distribution } from "./Distribution";
+import { PhonePanel } from "./PhonePanel";
 import { StationGlyph } from "./StationGlyph";
 import { useTheme } from "./theme";
 import { Invitation } from "./auth/Invitation";
@@ -371,6 +372,11 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* ── phone node ───────────────────────────────────────────────────── */}
+      {/* Directly under the room's history, so what both nodes are doing now is
+          read together, and the analysis of the room's record follows. */}
+      <PhonePanel from={from} hours={hours} theme={theme} />
 
       {/* ── distribution, integrity, provenance ──────────────────────────── */}
       <div className="band">

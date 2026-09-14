@@ -162,14 +162,20 @@ class BootAnchors:
         return anchor + timedelta(milliseconds=msg.uptime_ms)
 
 
-def resolve(msg: TelemetryMessage, received_at: datetime,
-            anchors: BootAnchors) -> ResolvedReading:
-    """Attach the authoritative instant, recording how it was arrived at.
+def resolve_instant(msg, received_at: datetime,
+                    anchors: BootAnchors) -> tuple[datetime, int]:
+    """The authoritative instant for any message, and the quality that records
+    how it was arrived at.
 
     Order of preference: the device clock when it can be believed, then the boot
     anchor, then arrival time. Every fallback sets a quality bit, so a later
     analysis can tell a measured timestamp from an inferred one instead of
     finding a column of instants that all look equally authoritative.
+
+    Only the envelope is read — `device_id`, `boot_id`, `uptime_ms`,
+    `device_time`, `quality` — which every contract version shares. That is the
+    point of keeping this separate from `resolve`: a second message type gets the
+    same rule by construction, rather than a copy of it that drifts.
     """
     quality = msg.quality
     clock_claimed = msg.device_time is not None and not (msg.quality & Q_CLOCK_UNSYNCED)
@@ -188,6 +194,13 @@ def resolve(msg: TelemetryMessage, received_at: datetime,
             instant = received_at
             quality |= Q_TIME_FROM_ARRIVAL
 
+    return instant, quality  # type: ignore[return-value]
+
+
+def resolve(msg: TelemetryMessage, received_at: datetime,
+            anchors: BootAnchors) -> ResolvedReading:
+    """Attach the authoritative instant to a v1 reading."""
+    instant, quality = resolve_instant(msg, received_at, anchors)
     return ResolvedReading(
         time=instant,  # type: ignore[arg-type]
         device_id=msg.device_id,

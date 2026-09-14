@@ -15,7 +15,8 @@ log = logging.getLogger(__name__)
 
 class MqttTelemetrySource:
     def __init__(self, host: str, port: int, username: str = "", password: str = "",
-                 topic: str = "psychron/v1/#", client_id: str | None = None,
+                 topics: tuple[str, ...] = ("psychron/v1/#", "psychron/v2/#"),
+                 client_id: str | None = None,
                  ca_cert: str | None = None, client_cert: str | None = None,
                  client_key: str | None = None) -> None:
         # Unique per process by default. Two MQTT clients sharing an identifier
@@ -25,7 +26,7 @@ class MqttTelemetrySource:
         if client_id is None:
             client_id = f"psychron-ingest-{os.getpid()}-{secrets.token_hex(3)}"
         self._client_id = client_id
-        self._topic = topic
+        self._topics = topics
         self._on_message = None
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
 
@@ -53,8 +54,11 @@ class MqttTelemetrySource:
             log.error("broker refused the connection: %s", reason_code)
             return
         log.info("connected as %s over %s, subscribing to %s", self._client_id,
-                 "mTLS" if self._tls else "plaintext", self._topic)
-        client.subscribe(self._topic, qos=1)
+                 "mTLS" if self._tls else "plaintext", ", ".join(self._topics))
+        # One subscription per contract version rather than psychron/#: a new
+        # prefix appearing under the root should have to be named here to be
+        # consumed, not arrive unannounced because a wildcard happened to match.
+        client.subscribe([(t, 1) for t in self._topics])
 
     def _handle_disconnect(self, _client, _userdata, _flags, reason_code, _props=None):
         log.warning("disconnected from the broker: %s", reason_code)

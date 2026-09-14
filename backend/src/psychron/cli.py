@@ -100,6 +100,10 @@ def cmd_run(args) -> int:
 
     repo = PostgresReadingRepository(dsn_from(env))
     repo.ensure_device(args.device, "Desk node", "DHT22")
+    # The phone node publishes contract v2. Its row exists before its first
+    # message, because the sample table's foreign key would reject that message.
+    repo.ensure_device(env.get("PSYCHRON_PHONE_DEVICE", "phone-01"),
+                       "Galaxy S26", "Android SensorManager")
 
     ingestor = Ingestor(repo)
     restored = ingestor.load_anchors()
@@ -125,9 +129,9 @@ def cmd_run(args) -> int:
     def on_message(topic, payload, received_at):
         ingestor.handle(topic, payload, received_at)
         s = ingestor.stats
-        if (s.stored + s.duplicates + s.rejected) % 20 == 0:
-            logging.info("stored=%d duplicates=%d rejected=%d boots=%d",
-                         s.stored, s.duplicates, s.rejected, s.boots)
+        if (s.stored + s.samples + s.duplicates + s.rejected) % 20 == 0:
+            logging.info("stored=%d samples=%d duplicates=%d rejected=%d boots=%d",
+                         s.stored, s.samples, s.duplicates, s.rejected, s.boots)
 
     try:
         source.run(on_message)

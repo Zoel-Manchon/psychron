@@ -8,6 +8,13 @@
 user esp32-01
 topic write psychron/v1/esp32-01/#
 
+# Contract v2 only, and only its own subtree. A phone that could write under v1
+# could pass window summaries off as instantaneous readings; one that could
+# write under another device's name could impersonate it.
+user phone-01
+topic write psychron/v2/phone-01/#
+
 # The ingestion service reads everything and writes nothing.
 user ingest
 topic read psychron/v1/#
+topic read psychron/v2/#

@@ -80,6 +80,40 @@ export type Device = {
 export type Health = {
   status: string; device: string;
   last_reading_age_s: number | null; device_reporting: boolean;
+  phone: string; last_sample_age_s: number | null; phone_reporting: boolean;
+};
+
+// Contract v2 quantities, as stored. Null means no sample in that window.
+export type PhoneSample = {
+  time: string;
+  window_ms: number;
+  firmware: string;
+  quality_flags: string[];
+  pressure_hpa: number | null;
+  illuminance_lux: number | null;
+  sound_rms_dbfs: number | null;
+  sound_peak_dbfs: number | null;
+  accel_rms: number | null;
+  accel_peak: number | null;
+  gyro_rms: number | null;
+  gyro_peak: number | null;
+  magnetic_ut: number | null;
+  heading_deg: number | null;
+  battery_temp_c: number | null;
+};
+
+export type PhoneCurrent = PhoneSample & {
+  device: string;
+  // Null when no pressure was recorded near three hours ago: a tendency against
+  // whatever reading happened to be closest would invent a trend.
+  pressure_tendency_3h_hpa: number | null;
+};
+
+export type PhonePoint = { t: string } & Omit<PhoneSample, "time" | "window_ms" | "firmware" | "quality_flags">;
+
+export type PhoneSeries = {
+  from: string; to: string; bucket: string;
+  count: number; truncated: boolean; max_points: number; points: PhonePoint[];
 };
 
 export const api = {
@@ -88,9 +122,18 @@ export const api = {
   readings: (from: string) => get<Series>("/api/readings", { from }),
   stats: (from: string) => get<Stats>("/api/stats", { from }),
   device: () => get<Device>("/api/device"),
+  phoneCurrent: () => get<PhoneCurrent>("/api/phone/current"),
+  phoneSeries: (from: string) => get<PhoneSeries>("/api/phone/series", { from }),
   exportUrl: (format: string, from: string) =>
     `/api/export?format=${format}&from=${encodeURIComponent(from)}`,
 };
+
+export function openPhoneLive(onSample: (s: PhoneSample) => void): WebSocket {
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${scheme}://${window.location.host}/api/live/phone`);
+  ws.onmessage = (e) => onSample(JSON.parse(e.data));
+  return ws;
+}
 
 export function openLive(onReading: (r: Record<string, unknown>) => void): WebSocket {
   // No token in the URL: the session cookie travels with the handshake.
@@ -102,6 +145,9 @@ export function openLive(onReading: (r: Record<string, unknown>) => void): WebSo
 }
 
 export const RANGES: { label: string; hours: number }[] = [
+  // Short enough that a gesture in front of the phone is a readable shape rather
+  // than a one-pixel spike on an hour-wide axis.
+  { label: "15 m", hours: 0.25 },
   { label: "1 h", hours: 1 },
   { label: "6 h", hours: 6 },
   { label: "24 h", hours: 24 },
