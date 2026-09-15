@@ -197,10 +197,20 @@ input:focus { outline: none; border-bottom: 1px solid var(--accent); }
 
 /* ── phone node ──────────────────────────────────────────────────────────── */
 
-.phone-tiles { display: grid; gap: 22px 26px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+/* Three named groups inside the band. The heading is set larger than a tile's label
+   and smaller than the masthead, numbered like the plates of a printed report, with
+   the instruments behind the group set small on the right. */
+.phone-section { margin-top: 30px; }
+.section-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+                border-bottom: 1px solid var(--rule); padding-bottom: 7px; margin-bottom: 16px; }
+.section-head h3 { font-family: var(--grot); font-size: 17px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+.section-index { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.section-sources { margin-left: auto; }
+
+.phone-tiles { display: grid; gap: 22px 26px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .phone-tiles > * { min-width: 0; }
-.phone-charts { display: grid; gap: 22px 26px; margin-top: 22px; }
-@media (min-width: 1080px) { .phone-charts { grid-template-columns: 1fr 1fr 1fr; } }
+.phone-charts { display: grid; gap: 22px 26px; margin-top: 22px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.phone-charts > * { min-width: 0; }
 
 /* A meter with a scale under it: the fill is the reading, the hairline border is
    the range, and nothing is coloured by whether the value is good. */
@@ -208,10 +218,15 @@ input:focus { outline: none; border-bottom: 1px solid var(--accent); }
 .meter-scale > span { background: var(--accent); }
 .ink { color: var(--ink); }
 
-.phone-lower { display: grid; gap: 22px 26px; margin-top: 26px; }
-@media (min-width: 1080px) { .phone-lower { grid-template-columns: 3fr 2fr; } }
-.phone-lower > * { min-width: 0; }
+/* A chart or a drawing beside the table or chart that completes it. */
+.phone-pair { display: grid; gap: 22px 26px; margin-top: 22px; }
+@media (min-width: 1080px) { .phone-pair { grid-template-columns: 3fr 2fr; } }
+.phone-pair > * { min-width: 0; }
 .track { width: 100%; height: auto; display: block; margin-top: 8px; }
+
+/* Signal over the window, divided in the colours the track's dots use. */
+.coverage { display: flex; height: 6px; margin: 6px 0 2px; border: 1px solid var(--rule-faint); }
+.coverage > span { display: block; min-width: 2px; }
 
 .events { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); }
 .events th { text-align: left; font-weight: 400; font-size: 10px; letter-spacing: 0.1em;

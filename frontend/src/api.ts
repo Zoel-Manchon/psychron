@@ -126,8 +126,19 @@ export type Outlook = {
   number: number; trend: "falling" | "steady" | "rising"; text: string; method: string;
 };
 
+/** The latest window that carried a position, without the position itself. */
+export type LastFix = {
+  time: string;
+  loc_acc_m: number | null;
+  alt_msl_m: number | null;
+  alt_acc_m: number | null;
+  speed_ms: number | null;
+};
+
 export type PhoneCurrent = PhoneSample & {
   device: string;
+  // Null when no window in the last day had a fix.
+  last_fix: LastFix | null;
   // Null when no pressure was recorded near three hours ago: a tendency against
   // whatever reading happened to be closest would invent a trend.
   pressure_tendency_3h_hpa: number | null;

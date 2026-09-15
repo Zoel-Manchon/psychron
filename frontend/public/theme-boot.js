@@ -6,6 +6,6 @@
 try {
   var t = localStorage.getItem("psychron.theme");
   document.documentElement.dataset.theme = t === "dark" ? "dark" : "light";
-} catch (e) {
+} catch {
   document.documentElement.dataset.theme = "light";
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Chart, findGaps } from "./Chart";
 import { Distribution } from "./Distribution";
 import { PhonePanel } from "./PhonePanel";
+import { SeriesChart, type Trace } from "./SeriesChart";
 import { StationGlyph } from "./StationGlyph";
+import { findGaps } from "./series";
 import { useTheme } from "./theme";
 import { Invitation } from "./auth/Invitation";
 import { SecondFactor } from "./auth/SecondFactor";
@@ -71,6 +72,16 @@ const DERIVED: [string, string, string, number][] = [
 // anything, and saying so is better than drawing a line from three hours of data.
 const FORECAST_DAYS_REQUIRED = 14;
 
+// The room's history, drawn by the same chart as every phone quantity: one set of
+// rules for gaps, axes and colours on the whole sheet.
+const ROOM: Trace[] = [
+  { key: "temp", label: "temperature", unit: "°C", color: "--accent", digits: 2 },
+  { key: "hum", label: "humidity", unit: "% RH", suffix: "%", color: "--cyan", digits: 1, axis: "right" },
+];
+
+const initialHours = () =>
+  hoursFromSlug(new URLSearchParams(window.location.search).get("range")) ?? 24;
+
 export default function App() {
   const [theme, toggleTheme] = useTheme();
   const [authState, setAuthState] = useState<AuthState | null>(null);
@@ -81,8 +92,12 @@ export default function App() {
   // change with replaceState — pushState would make the back button walk through
   // range selections instead of leaving the page, which is not what a reader
   // pressing Back is asking for.
-  const [hours, setHours] = useState(
-    () => hoursFromSlug(new URLSearchParams(window.location.search).get("range")) ?? 24);
+  const [hours, setHours] = useState(initialHours);
+  // The window's start, as a value rather than computed during render: since()
+  // returns a fresh instant on every call, and a fresh `from` each render made
+  // load() new each time and the page requested in a loop. Moved on by the range
+  // buttons and once a minute, so "the last hour" keeps meaning the last hour.
+  const [from, setFrom] = useState(() => since(initialHours()));
   const [current, setCurrent] = useState<Current | null>(null);
   const [series, setSeries] = useState<Series | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -91,22 +106,17 @@ export default function App() {
   const [alerts, setAlerts] = useState<AlertEpisode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
-  const [refreshes, setRefreshes] = useState(0);
 
   const invite = new URLSearchParams(window.location.search).get("invite");
 
   const selectRange = useCallback((h: number) => {
     setHours(h);
+    setFrom(since(h));
     const label = RANGES.find((r) => r.hours === h)?.label;
     const params = new URLSearchParams(window.location.search);
     if (label) params.set("range", rangeSlug(label));
     window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
   }, []);
-
-  // Memoised, and not as an optimisation: since(hours) returns a fresh value on
-  // every call, so computing it during render made load() new each time and the
-  // page requested in a loop.
-  const from = useMemo(() => since(hours), [hours, refreshes]);
 
   useEffect(() => {
     auth.state().then((s) => { setAuthState(s); setWho(s.signed_in_as); })
@@ -128,9 +138,9 @@ export default function App() {
   useEffect(() => { if (who) load(); }, [who, load]);
 
   useEffect(() => {
-    const id = setInterval(() => setRefreshes((n) => n + 1), 60_000);
+    const id = setInterval(() => setFrom(since(hours)), 60_000);
     return () => clearInterval(id);
-  }, []);
+  }, [hours]);
 
   useEffect(() => {
     const tick = () => api.health().then(setHealth).catch(() => setHealth(null));
@@ -364,7 +374,7 @@ export default function App() {
           </div>
         </div>
         {series
-          ? <Chart points={series.points} bucket={series.bucket} theme={theme} />
+          ? <SeriesChart points={series.points} bucket={series.bucket} traces={ROOM} theme={theme} height={320} />
           : <p className="mono-note">Loading the window…</p>}
 
         {/* Export belongs to the window, so it sits under the window it exports

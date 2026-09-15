@@ -251,6 +251,27 @@ class ReadQueries:
             row = cur.fetchone()
         return row["alt"] if row and row["n"] >= 5 else None
 
+    def last_fix(self, device_id: str, at: datetime,
+                 within: timedelta = timedelta(hours=24)) -> dict | None:
+        """The most recent window that carried a position, without the position.
+
+        For the panel's location tile, which should say how high the phone is and how
+        old that is, rather than go blank whenever the latest window happens to have
+        no fix. Coordinates stay out of it on purpose: a tile has no use for them, and
+        the track that does draws them relative to its own start.
+        """
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT time, loc_acc_m, alt_msl_m, alt_acc_m, speed_ms
+                FROM sample
+                WHERE device_id = %s AND lat IS NOT NULL AND time BETWEEN %s AND %s
+                ORDER BY time DESC LIMIT 1
+                """,
+                (device_id, at - within, at),
+            )
+            return cur.fetchone()
+
     def events(self, device_id: str, start: datetime, end: datetime, limit: int = 500) -> list[dict]:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(

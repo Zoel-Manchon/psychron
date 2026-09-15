@@ -326,8 +326,10 @@ def create_app(dsn: str, env_path, device_id: str = "esp32-01",
                 # reduction is a near-constant factor over three hours.
                 outlook = weather.zambretti(sea_level, tendency)
 
+        fix = queries.last_fix(phone_device_id, row["time"])
         return {"device": phone_device_id,
                 **_sample_payload(row),
+                "last_fix": None if fix is None else {**fix, "time": _utc(fix["time"])},
                 "pressure_tendency_3h_hpa": tendency,
                 "altitude_m": altitude,
                 "altitude_source": source if altitude is not None else None,
