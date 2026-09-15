@@ -21,14 +21,14 @@ https://github.com/user-attachments/assets/7cd61433-e8dd-42be-8adb-ff7d193a1d83
 | **The one idea** | The reading is the asset. A room can be measured again; the elapsed calendar time cannot, so every design decision protects the continuity of the record |
 | **Nodes** | ESP32 + DHT22 on a breadboard (temperature, humidity) · Galaxy S26 running a native app (pressure, light, A-weighted noise, motion and vibration events, heading, battery temperature, GNSS position, serving cell) |
 | **Stack** | Arduino C++ · Kotlin, no AndroidX · Mosquitto over mTLS · Python 3.12, FastAPI, psycopg3 · PostgreSQL 17 + TimescaleDB · React 19 + TypeScript + uPlot · Caddy |
-| **Size** | ~15,000 lines across firmware, app, backend, frontend, schema and infrastructure · 222 Python, 78 Kotlin and 14 panel tests, two sanitised firmware suites, 17 transport assertions |
+| **Size** | ~16,000 lines across firmware, app, backend, frontend, schema and infrastructure · 222 Python, 78 Kotlin and 14 panel tests, two sanitised firmware suites, 17 transport assertions |
 | **How to run it** | `cd infra && ./bootstrap.sh && ./make-certs.sh && docker compose up -d` |
 
 [Topology](#topology) · [Architecture](#architecture) · [The phone node](#the-phone-node) · [Why the timestamps are hard](#why-the-timestamps-are-hard) · [Security](#security) · [The record](#the-record) · [The panel](#the-panel) · [Running it](#running-it) · [Verifying](#verifying) · [Layout](#layout) · [Status](#status) · [Licence](#licence)
 
 ## Topology
 
-Nothing crosses the network unauthenticated. The only listener a node can reach is the broker's mTLS port; the plaintext MQTT port does not exist. Each node may write only to its own topic, and the ESP32 and the phone speak different contract versions on different topic trees.
+Nothing crosses the network unauthenticated. A node reaches two listeners, both mutual TLS: the broker, and for the ESP32's updates the firmware server. The plaintext MQTT port does not exist, the API is not published, and the browser's only way in is Caddy. Each node may write only to its own topic, and the ESP32 and the phone speak different contract versions on different topic trees.
 
 ```mermaid
 flowchart TB
@@ -51,14 +51,14 @@ flowchart TB
     end
 
     subgraph host["Docker host"]
-        WEB["Caddy<br/>8444 HTTPS"]
+        WEB["Caddy<br/>8444 HTTPS, the panel"]
         BRK["Mosquitto<br/>8883 mTLS only"]
-        FW["nginx<br/>8443 OTA images"]
+        FW["nginx<br/>8443 mTLS, OTA images"]
         API["FastAPI<br/>8000, not published"]
-        ING["ingest<br/>Python"]
+        ING["ingest<br/>readings in, alerts out"]
         DB[("PostgreSQL 17<br/>TimescaleDB")]
-        WEB --> API
-        BRK --> ING
+        WEB -->|"/api"| API
+        BRK <--> ING
         BRK ~~~ FW
         API --> DB
         ING --> DB
@@ -69,68 +69,75 @@ flowchart TB
     APP -.->|"mobile data, batched"| TUN
     TUN -.->|"same mTLS stream"| BRK
     ESP -->|"MQTT v1, Wi-Fi"| BRK
-    ESP -->|"OTA, HTTPS"| FW
+    ESP -->|"OTA, mTLS"| FW
 ```
 
-Topics are `psychron/v1/esp32-01/reading`, and `psychron/v2/phone-01/sample` and `/event`. One message flows the other way: ingestion publishes alerts on `psychron/alerts/`, retained, and only the phone may read them. Both nodes and the host set their clocks from the NTP pool, so every timestamp in the system is measured against one standard. Measured as arrival minus the node's own stamp, to the millisecond: median −1.8 ms for the ESP32, 23 ms for the phone.
+Topics are `psychron/v1/esp32-01/reading`, and `psychron/v2/phone-01/sample` and `/event`. One message flows the other way: ingestion publishes alerts on `psychron/alerts/`, retained, and only the phone may read them. Both nodes and the host set their clocks from the NTP pool, so every timestamp in the system is measured against one standard. Measured as arrival minus the node's own stamp, to the millisecond, over two hours of both nodes reporting: median −6 ms for the ESP32, 5 ms for the phone.
 
 ## Architecture
 
-Hexagonal, and not as decoration: the domain holds the parsing, the psychrometrics and the identity rules, and it imports nothing from FastAPI, psycopg or paho. Every adapter is replaceable because the core never learned its name.
+Hexagonal, and not as decoration: the domain holds the parsing, the timestamp rule, the psychrometrics, the weather and alert rules and the identity rules, and it imports nothing from FastAPI, psycopg or paho. Every adapter is replaceable because the core never learned its name.
 
-Dotted edges are the ports — `TelemetrySource`, `ReadingRepository`, `Authenticator`. Swapping MQTT for anything else, or the local identity provider for an external one, means writing one class and changing no route.
+Two use cases stand between the adapters and the domain. `Ingestor` turns a message into a stored record: it hands the payload to its contract's parser, places it in time and writes it. `Alerter` reads what the record says, applies the rules and announces what changed. Dotted edges are the ports they and the routes speak through — `TelemetrySource`, `ReadingRepository`, `AlertStore`, `AlertSink`, `Authenticator`. Swapping MQTT for anything else, or the local identity provider for an external one, means writing one class and changing no route. The panel's reads go straight to `ReadQueries`: a bounded query shaped for a chart has no business passing through the rules that guard the write path.
 
 The two contracts share one rule for time. Contract v1 (the ESP32's readings) and contract v2 (the phone's window summaries) are parsed separately, but both hand their envelope to `resolve_instant`, so a second node type got the timestamp logic by construction instead of a copy of it that drifts.
 
-Alerts are a use case of their own beside ingestion: every 30 seconds the rules read what the record says through `AlertStore`, decide with separate raise and clear levels, and announce each transition through `AlertSink`, which is the same MQTT connection pointed the other way.
+Alerts run beside ingestion rather than inside it: every 30 seconds the rules read what the record says through `AlertStore`, decide with separate raise and clear levels, and announce each transition through `AlertSink`, which is the same MQTT connection pointed the other way.
 
 ```mermaid
 flowchart LR
     subgraph driving["Driving adapters"]
-        CLI["CLI, admin, provisioning"]
+        HTTP["FastAPI routes<br/>panel, phone, live sockets"]
+        CLI["admin CLI<br/>invitations, access"]
         MQTT["MqttTelemetrySource<br/>paho, mTLS<br/>v1 and v2 topics"]
         TICK["alert loop<br/>every 30 s"]
-        HTTP["FastAPI routes<br/>panel, phone, live sockets"]
+    end
+
+    subgraph cases["Use cases"]
+        ING["Ingestor<br/>parse, place, store"]
+        ALT["Alerter<br/>observe, decide, announce"]
     end
 
     subgraph core["Domain — imports no framework"]
+        WEA["weather<br/>sea level, Zambretti"]
+        PSY["psychrometrics<br/>dew point, VPD, heat index"]
+        IDN["identity<br/>lockout, invitations, TOTP"]
         TEL["telemetry<br/>contract v1, boot anchors"]
         SMP["samples, events<br/>contract v2, closed schema"]
         CLK["resolve_instant<br/>one timestamp rule for all"]
         ALR["alerts<br/>rules with hysteresis"]
-        WEA["weather<br/>sea level, Zambretti"]
-        PSY["psychrometrics<br/>dew point, VPD, heat index"]
-        IDN["identity<br/>lockout, invitations, TOTP"]
     end
 
     subgraph out["Driven adapters"]
+        RQ["ReadQueries<br/>bucket ladders, last fix<br/>streaming export"]
+        IDP["PostgresIdentity<br/>Argon2id + TOTP"]
         PG["PostgresReadingRepository<br/>reading, sample, event"]
         AST["PostgresAlertStore<br/>alert"]
         PUB["MQTT publish<br/>psychron/alerts/, retained"]
-        IDP["PostgresIdentity<br/>Argon2id + TOTP"]
-        RQ["ReadQueries<br/>bucket ladders<br/>streaming export"]
     end
 
     DB[("PostgreSQL 17<br/>TimescaleDB")]
 
-    CLI --> TEL
-    MQTT -.->|"TelemetrySource"| TEL
-    MQTT -.->|"TelemetrySource"| SMP
+    HTTP ----> RQ
+    HTTP ---> WEA
+    HTTP ---> PSY
+    HTTP -..->|"Authenticator"| IDN
+    CLI ---> IDN
+    IDN ---> IDP
+    MQTT -.->|"TelemetrySource"| ING
+    ING --> TEL
+    ING --> SMP
     TEL --> CLK
     SMP --> CLK
-    CLK -.->|"ReadingRepository"| PG
-    TICK --> ALR
-    ALR -.->|"AlertStore"| AST
-    ALR -.->|"AlertSink"| PUB
-    HTTP --> WEA
-    HTTP --> PSY
-    HTTP -.->|"Authenticator"| IDN
-    HTTP --> RQ
-    IDN --> IDP
+    ING -...->|"ReadingRepository"| PG
+    TICK --> ALT
+    ALT --> ALR
+    ALT -...->|"AlertStore"| AST
+    ALT -...->|"AlertSink"| PUB
+    RQ --> DB
+    IDP --> DB
     PG --> DB
     AST --> DB
-    IDP --> DB
-    RQ --> DB
 ```
 
 ## The phone node
@@ -145,7 +152,7 @@ flowchart TB
         IMU["accelerometer 100 Hz<br/>gyroscope"]
         ENV["barometer, light,<br/>magnetometer, battery"]
         MIC["microphone 48 kHz"]
-        GEO["fused location<br/>MSL altitude"]
+        GEO["fused location<br/>high accuracy, MSL altitude"]
         RAD["serving cell<br/>RSRP, RSRQ, SINR, band"]
     end
 
@@ -155,6 +162,7 @@ flowchart TB
     CON["Contract v2<br/>groups omitted,<br/>never zero-filled"]
     BOX["Outbox<br/>SQLite, a day on disk"]
     KEY["DeviceKey<br/>StrongBox, CSR"]
+    NET["NetworkWatch + Endpoints<br/>LAN first at home,<br/>tunnel first away"]
     LNK["MqttLink<br/>QoS 1<br/>batched when metered"]
     BRK["Broker<br/>mTLS"]
     NTF["AlertNotifier"]
@@ -172,17 +180,19 @@ flowchart TB
     CON --> BOX
     BOX --> LNK
     KEY -->|"signs the handshake"| LNK
+    NET -->|"network changes"| LNK
     LNK --> BRK
     BRK -->|"alerts, retained"| NTF
 ```
 
 - **Its key never leaves the hardware.** The node generates a P-256 key in StrongBox (the TEE on phones without one) and sends only a signing request; the host verifies it with `openssl req -verify` before the CA signs it. The key the phone held as a file before enrolling is revoked, and the broker refuses it.
+- **Where it is, and how sure.** Location at high accuracy from the platform's own fused provider, with GNSS altitude converted to mean sea level on the device. A window carries a fix only while it is under ten seconds old; the screen keeps an older one on show, with its age.
 - **Audio never leaves the phone.** Each window's PCM is reduced in memory to a handful of levels and discarded: RMS and peak, and A-weighted LAeq, LAmax, L10 and L90 through a filter checked against the IEC 61672 table. Relative to full scale, not dB SPL, unless a measured calibration offset is configured.
 - **The record survives the app.** Messages wait in SQLite, a day's worth, and are deleted only after the broker acknowledges them. A kill, a reboot or an update overnight costs latency, not windows.
 - **Mobile data is spent carefully.** On a metered network messages leave in batches every 30 seconds, so the modem can idle between them instead of holding its most expensive state all day. With a tunnel address provisioned, the node keeps publishing away from home — see [docs/REMOTE-NODES.md](docs/REMOTE-NODES.md).
 - **Vibration is an event, not a column.** A classic seismic trigger — short-term over long-term energy — runs on the raw accelerometer, at the fastest rate the phone grants (100 Hz on the S26, which refuses 200 without a special permission), only while the gyroscope says the phone has been still, and reports each event's peak acceleration, duration and pitch. The background it compares against learns only while the phone lies still, so carrying it about does not deafen it, and a knock on the table it lies on is enough to raise an event.
 - **Every tile says why it is blank.** Location off in the phone's settings, a fix that is half a minute old, a detector paused because the phone is in a hand, a sensor the phone refused: each is written on the screen, because a dash with no reason reads as a broken sensor.
-- **Its own clock.** Android sets the wall clock from the mobile network, measured here at 475 ms ahead of NTP. The app asks the NTP pool itself, keeps the fastest of four exchanges, and carries that time forward on the monotonic clock, so a network time step can never move a window.
+- **Its own clock.** Android sets the wall clock from the mobile network, measured here anywhere from 50 to 475 ms ahead of NTP. The app asks the NTP pool itself, keeps the fastest of four exchanges, and carries that time forward on the monotonic clock, so a network time step can never move a window.
 - **The screen shows the literal message.** Byte for byte what went on the wire, coloured but not reformatted, because "only summaries leave the device" is a claim and the message is the evidence.
 
 ## Why the timestamps are hard
@@ -322,7 +332,7 @@ The panel is then on `https://localhost:8444`. The admin and provisioning tools
 run on the host rather than in a container, so install the backend once:
 
 ```bash
-python -m venv backend/.venv && backend/.venv/Scripts/pip install -e "backend[dev]"
+python -m venv backend/.venv && backend/.venv/Scripts/pip install -e "backend[dev]"   # bin/ on Linux and macOS
 ```
 
 Create the first account — whoever enrols first becomes the owner. The command
@@ -346,7 +356,7 @@ cd android && ./gradlew installDebug
 cd ../infra && ./provision-phone.sh
 ```
 
-Optional settings in `.env`: `PSYCHRON_STATION_ELEVATION_M`, used for sea-level pressure when the phone has no confident GNSS altitude, and `PSYCHRON_PHONE_SPL_OFFSET_DB`, a sound level meter's dB(A) minus the phone's LAeq over the same steady noise. Without it, noise stays relative and the panel says so. The simulator speaks contract v2 with every group and event for anyone without the phone: `python -m psychron.simulate`.
+Optional settings in `.env`: `PSYCHRON_STATION_ELEVATION_M`, used for sea-level pressure when the phone has no confident GNSS altitude, and `PSYCHRON_PHONE_SPL_OFFSET_DB`, a sound level meter's dB(A) minus the phone's LAeq over the same steady noise. Without it, noise stays relative and the panel says so. The simulator speaks contract v2 with every group and event for anyone without the phone: `python -m psychron.simulate`. Once a phone has enrolled the host holds no key for it, so the simulator speaks as it with a one-day credential from `infra/ephemeral-cert.sh`, passed with `--cert-dir`.
 
 ## Verifying
 
@@ -402,6 +412,7 @@ Open, honestly:
 - **Noise is uncalibrated until someone calibrates it.** The A-weighting is checked against the standard; the microphone's absolute gain is not, and needs a sound level meter once per phone.
 - **The vibration trigger is not a seismometer.** STA/LTA on a phone lying still catches doors, footsteps and machinery two rooms away; telling an earthquake from a lorry would take several phones agreeing, which one phone cannot do.
 - **The outlook is a rule of thumb.** Zambretti's 1915 formulas, without wind or season, from a sea-level pressure only as good as the altitude it was reduced with.
+- **Every container can read every key.** The compose stack mounts the whole certificate directory, CA key included, into the broker, ingestion, web and firmware server, where each needs only its own certificate and key and the CA's certificate. Narrowing the mounts means moving the transport checks out of the broker's container first, since they run their probes from inside it.
 - **The revocation list is read at start.** Revoking a certificate takes effect when the broker restarts, which the script says, rather than the moment it is revoked.
 - **No OTA rollback.** The image is verified before it is committed, but the Arduino bootloader carries no rollback machinery; a firmware that boots and then misbehaves needs the cable.
 - **Forecasting is not implemented.** The panel shows progress toward the fourteen days of history a daily-cycle model would need, and says so rather than drawing a line through three hours of data.
