@@ -49,5 +49,14 @@ The node takes both and picks per network; the broker certificate names both.
 
 The screen shows this session's traffic split into metered and unmetered, and
 a daily rate once there is a minute to extrapolate from. At one window every two
-seconds, each is a ~330-byte message plus MQTT, TLS and TCP framing and the QoS 1
-acknowledgement, so expect in the order of 25–30 MB a day, more through a tunnel.
+seconds, each is a message of a few hundred bytes plus MQTT, TLS and TCP framing
+and the QoS 1 acknowledgement, so expect in the order of 30–40 MB a day with
+location, noise and the cell included, more through a tunnel.
+
+Battery matters more than bytes. A modem that transmits every two seconds never
+leaves its connected state, which on LTE and NR is the expensive one. So on a
+metered network the node sends in batches: messages wait in the on-disk outbox
+until the oldest is 30 seconds old, then leave together, and the modem can idle
+in between. The windows keep their own timestamps, so the record is unchanged;
+the live panel simply lags by up to half a minute, and the phone's screen says
+"batching every 30 s" while it does. Back on Wi-Fi, messages go out as measured.
