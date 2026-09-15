@@ -71,6 +71,35 @@ else
   meh "no g++ and no Docker — the host tests need a C++17 compiler"
 fi
 
+# ── the panel ───────────────────────────────────────────────────────────────
+rule "Panel"
+if command -v node >/dev/null 2>&1 && [ -d frontend/node_modules ]; then
+  # Node's own test runner on the TypeScript as written: no test framework in the
+  # dependency tree, and nothing compiled that could differ from what is shipped.
+  out=$(cd frontend && npm test --silent 2>&1)
+  code=$?
+  printf '%s\n' "$out" | grep -E '^ℹ (tests|fail)' | sed 's/^/        /'
+  [ $code -eq 0 ] && ok "coverage, track, tendency and gap arithmetic" || no "panel tests"
+  if (cd frontend && npx tsc -b >/dev/null 2>&1); then ok "types check across the panel and its tests"; else no "panel types"; fi
+else
+  meh "no node or no frontend/node_modules — run npm install in frontend/"
+fi
+
+# ── the phone node ──────────────────────────────────────────────────────────
+rule "Phone node"
+if [ -n "${JAVA_HOME:-}" ] && { [ -n "${ANDROID_HOME:-}" ] || [ -f android/local.properties ]; }; then
+  gradlew=./gradlew
+  [ -f android/gradlew.bat ] && [ -n "${WINDIR:-}" ] && gradlew=./gradlew.bat
+  if (cd android && $gradlew testDebugUnitTest --console=plain -q >/dev/null 2>&1); then
+    n=$(grep -ho 'tests="[0-9]*"' android/app/build/test-results/testDebugUnitTest/*.xml | tr -dc '0-9\n' | awk '{ s += $1 } END { print s }')
+    ok "${n:+$n tests: }contract, readouts, vibration trigger, A-weighting, SNTP, signing request"
+  else
+    no "phone node unit tests"
+  fi
+else
+  meh "no JAVA_HOME and Android SDK — the app's tests need both"
+fi
+
 # ── the claim that cannot be checked by a unit test ─────────────────────────
 rule "Transport"
 if docker compose -f infra/docker-compose.yml ps --status running 2>/dev/null | grep -q broker; then

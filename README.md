@@ -6,7 +6,7 @@
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)](frontend/)
 [![Android node](https://img.shields.io/badge/Android-Kotlin-3DDC84?logo=android&logoColor=white)](android/)
 [![MQTT 3.1.1 over mTLS](https://img.shields.io/badge/MQTT%203.1.1-mTLS-660066?logo=eclipsemosquitto&logoColor=white)](#security)
-[![Tests: 283](https://img.shields.io/badge/tests-283-2563EB)](#verifying)
+[![Tests: 314](https://img.shields.io/badge/tests-314-2563EB)](#verifying)
 
 An ESP32 measures a room and a phone adds nine more senses. Each node signs its telemetry with its own client certificate, and a Python service turns both streams into one record that survives outages, reboots, network changes and devices with no working clock.
 
@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/7cd61433-e8dd-42be-8adb-ff7d193a1d83
 | **The one idea** | The reading is the asset. A room can be measured again; the elapsed calendar time cannot, so every design decision protects the continuity of the record |
 | **Nodes** | ESP32 + DHT22 on a breadboard (temperature, humidity) · Galaxy S26 running a native app (pressure, light, A-weighted noise, motion and vibration events, heading, battery temperature, GNSS position, serving cell) |
 | **Stack** | Arduino C++ · Kotlin, no AndroidX · Mosquitto over mTLS · Python 3.12, FastAPI, psycopg3 · PostgreSQL 17 + TimescaleDB · React 19 + TypeScript + uPlot · Caddy |
-| **Size** | ~15,000 lines across firmware, app, backend, frontend, schema and infrastructure · 222 Python and 61 Kotlin tests, two sanitised firmware suites, 17 transport assertions |
+| **Size** | ~15,000 lines across firmware, app, backend, frontend, schema and infrastructure · 222 Python, 78 Kotlin and 14 panel tests, two sanitised firmware suites, 17 transport assertions |
 | **How to run it** | `cd infra && ./bootstrap.sh && ./make-certs.sh && docker compose up -d` |
 
 [Topology](#topology) · [Architecture](#architecture) · [The phone node](#the-phone-node) · [Why the timestamps are hard](#why-the-timestamps-are-hard) · [Security](#security) · [The record](#the-record) · [The panel](#the-panel) · [Running it](#running-it) · [Verifying](#verifying) · [Layout](#layout) · [Status](#status) · [Licence](#licence)
@@ -142,7 +142,7 @@ flowchart TB
     CLK["TrustedClock<br/>SNTP + monotonic clock"]
 
     subgraph sensors["Sensors, microphone, GNSS, modem"]
-        IMU["accelerometer 200 Hz<br/>gyroscope"]
+        IMU["accelerometer 100 Hz<br/>gyroscope"]
         ENV["barometer, light,<br/>magnetometer, battery"]
         MIC["microphone 48 kHz"]
         GEO["fused location<br/>MSL altitude"]
@@ -180,7 +180,8 @@ flowchart TB
 - **Audio never leaves the phone.** Each window's PCM is reduced in memory to a handful of levels and discarded: RMS and peak, and A-weighted LAeq, LAmax, L10 and L90 through a filter checked against the IEC 61672 table. Relative to full scale, not dB SPL, unless a measured calibration offset is configured.
 - **The record survives the app.** Messages wait in SQLite, a day's worth, and are deleted only after the broker acknowledges them. A kill, a reboot or an update overnight costs latency, not windows.
 - **Mobile data is spent carefully.** On a metered network messages leave in batches every 30 seconds, so the modem can idle between them instead of holding its most expensive state all day. With a tunnel address provisioned, the node keeps publishing away from home — see [docs/REMOTE-NODES.md](docs/REMOTE-NODES.md).
-- **Vibration is an event, not a column.** A classic seismic trigger — short-term over long-term energy — runs on the raw accelerometer at 200 Hz, only while the gyroscope says the phone has been still, and reports each event's peak acceleration, duration and pitch.
+- **Vibration is an event, not a column.** A classic seismic trigger — short-term over long-term energy — runs on the raw accelerometer, at the fastest rate the phone grants (100 Hz on the S26, which refuses 200 without a special permission), only while the gyroscope says the phone has been still, and reports each event's peak acceleration, duration and pitch. The background it compares against learns only while the phone lies still, so carrying it about does not deafen it, and a knock on the table it lies on is enough to raise an event.
+- **Every tile says why it is blank.** Location off in the phone's settings, a fix that is half a minute old, a detector paused because the phone is in a hand, a sensor the phone refused: each is written on the screen, because a dash with no reason reads as a broken sensor.
 - **Its own clock.** Android sets the wall clock from the mobile network, measured here at 475 ms ahead of NTP. The app asks the NTP pool itself, keeps the fastest of four exchanges, and carries that time forward on the monotonic clock, so a network time step can never move a window.
 - **The screen shows the literal message.** Byte for byte what went on the wire, coloured but not reformatted, because "only summaries leave the device" is a claim and the message is the evidence.
 
@@ -275,7 +276,13 @@ Results are capped at 5,000 points; exports stream through a server-side cursor 
 
 ## The panel
 
-One page. Current reading and derived quantities, history with a range selector, distribution of the window as a box with whiskers and the live value marked on the same axis, record integrity, provenance, export, and the gaps and boots the record knows about. Below it, the phone: live tiles over a websocket, the three-hour pressure tendency in the Met Office's words, pressure reduced to sea level with a Zambretti outlook labelled as the 1915 rule of thumb it is, noise as LAeq, L10 and L90, the serving cell with its band and the broker's round trip, height change from the barometer, a table of vibration events, and the track, drawn relative to its own start with no base map, so a screenshot shows a shape rather than an address. Open alerts sit above everything, one line each.
+One page. Current reading and derived quantities, history with a range selector, distribution of the window as a box with whiskers and the live value marked on the same axis, record integrity, provenance, export, and the gaps and boots the record knows about. Open alerts sit above everything, one line each.
+
+Below the room, the phone, in three numbered groups — each with its numbers above their history, because nine tiles in one grid and six charts in another read as an inventory rather than a record:
+
+- **Environment** — station pressure and its three-hour tendency in the Met Office's words; pressure reduced to sea level with a Zambretti outlook, labelled as the 1915 rule of thumb it is; light on a logarithmic meter; noise as LAeq, L10 and L90; height change from the barometer.
+- **Motion** — acceleration and rotation, the heading on a compass, and vibration events counted, charted against motion and listed, polled every ten seconds so a knock shows up while someone is watching.
+- **Position and coverage** — altitude from the latest fix with its age, the serving cell with its band and the broker's round trip, the share of the window spent in each signal band, and the track, drawn relative to its own start with no base map, so a screenshot shows a shape rather than an address. Fixes rougher than ±25 m are left out rather than drawn as a journey, and distance accrues only for moves larger than the fixes are sure of, so a phone on a desk reads as stationary instead of as a hundred-metre walk.
 
 Measured and derived values are set apart typographically, because a dew point carries the sensor's error *and* the error of a fitted equation, and no legend should have to say so. Light theme by default with an explicit toggle; nothing follows the operating system.
 
@@ -348,21 +355,25 @@ Optional settings in `.env`: `PSYCHRON_STATION_ELEVATION_M`, used for sea-level 
 ./verify.sh
 ```
 
-Four suites, because they answer different questions and none replaces another:
+Six suites, because they answer different questions and none replaces another:
 the Python tests say the arithmetic is right, the payload tests say the
 serialiser cannot walk off the end of its buffer, the unconfirmed-publish tests
-say a reading is held until it is proven delivered, and the mTLS checks say the
+say a reading is held until it is proven delivered, the panel tests say the
+coverage, track and gap arithmetic is right, the phone node's tests say what it
+encodes and what its screen says are right, and the mTLS checks say the
 transport really refuses what it claims to refuse — the only one that can be
 wrong while every unit test still passes.
 
 The firmware suites run under AddressSanitizer and UBSan with a host C++17
-compiler, or in a Debian container when there is none, and are reported as
-skipped when neither exists rather than quietly counting as a pass. The app's
-own tests — contract encoding, the SNTP arithmetic, endpoint choice, the
-A-weighting filter against the IEC table, the vibration trigger on synthetic
-shaking, the signing request's DER — run with `./gradlew testDebugUnitTest` in
-`android/`, which also leaves a request in `app/build/csr-probe.pem` for
-`openssl req -verify` to judge.
+compiler, or in a Debian container when there is none. The panel's tests run on
+Node's own test runner against the TypeScript as written, with no test framework
+in the dependency tree. The phone node's run with Gradle when `JAVA_HOME` and an
+Android SDK are present — contract encoding, every tile's wording, the SNTP
+arithmetic, endpoint choice, the A-weighting filter against the IEC table, the
+vibration trigger on synthetic knocks and shaking, the signing request's DER —
+and leave a request in `android/app/build/csr-probe.pem` for `openssl req
+-verify` to judge. Anything whose toolchain is missing is reported as skipped,
+never quietly counted as a pass.
 
 ## Layout
 
@@ -373,6 +384,7 @@ android/                  the phone node: sensors, noise, vibration, location, c
 backend/src/psychron/     domain, ports, adapters, API, CLI, alerts, phone simulator
 db/migrations/            schema, hypertables, continuous aggregates, identity, events, alerts
 frontend/src/             the panel
+frontend/tests/           the panel's arithmetic, on Node's test runner
 infra/                    compose stack, PKI, Caddy, provisioning, backup and assertion scripts
 docs/CONTRACT.md          contract v1, the ESP32's readings, and why it cannot change
 docs/CONTRACT-v2.md       contract v2, the phone's window summaries
