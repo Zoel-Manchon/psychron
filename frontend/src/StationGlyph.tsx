@@ -17,7 +17,7 @@ type Props = {
   callouts?: boolean;
 };
 
-const W = 470;
+const W = 500;
 const H = 340;
 
 const f = (v: number | null, d = 1) => (v === null ? "—" : v.toFixed(d));
@@ -93,7 +93,7 @@ export function StationGlyph({ temperature, dewPoint, humidity, trendPerHour,
       </g>
 
       {callouts && (
-        <g fontFamily="var(--grot)" fontSize="9.5" letterSpacing="0.14em" fill="var(--ink-3)">
+        <g fontFamily="var(--grot)" fontSize="12" letterSpacing="0.06em" fill="var(--ink-2)">
           {/* Leader lines onto the artwork rather than a legend box off to the
               side. Each label owns its own horizontal band so none can collide
               with another as values change width. */}

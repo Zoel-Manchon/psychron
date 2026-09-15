@@ -23,16 +23,34 @@
   --paper: #f4f1ea;
   --panel: #faf8f4;
   --ink: #16140f;
-  --ink-2: rgba(22, 20, 15, 0.6);
-  --ink-3: rgba(22, 20, 15, 0.38);
-  --rule: rgba(22, 20, 15, 0.2);
-  --rule-faint: rgba(22, 20, 15, 0.1);
-  --fill: rgba(22, 20, 15, 0.06);
+  /* Secondary ink carries every sentence on the page, so it clears 4.5:1 on the
+     paper (5.2:1); the tertiary one is for units, separators and chart furniture,
+     which are read alongside something darker (3:1). */
+  --ink-2: rgba(22, 20, 15, 0.64);
+  --ink-3: rgba(22, 20, 15, 0.46);
+  --rule: rgba(22, 20, 15, 0.18);
+  --rule-faint: rgba(22, 20, 15, 0.09);
+  --fill: rgba(22, 20, 15, 0.05);
   --accent: #b23a18;
-  --cyan: #3f7683;
+  /* Checked as a pair with the accent (scripts/validate_palette.js): the cyan this
+     replaced sat below the chroma floor and read as grey beside it. */
+  --cyan: #007592;
 
   --grot: Archivo, system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* One spacing scale. Every gap on the sheet is one of these, so rhythm comes from
+     the scale rather than from a margin chosen on the spot. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+  --gutter: 32px;
+  --page: 32px;
 
   color-scheme: light;
 }
@@ -42,18 +60,20 @@
   --paper: #131317;
   --panel: #1a1a1f;
   --ink: #ece7dd;
-  --ink-2: rgba(236, 231, 221, 0.6);
-  --ink-3: rgba(236, 231, 221, 0.38);
-  --rule: rgba(236, 231, 221, 0.22);
-  --rule-faint: rgba(236, 231, 221, 0.12);
-  --fill: rgba(236, 231, 221, 0.08);
+  --ink-2: rgba(236, 231, 221, 0.64);
+  --ink-3: rgba(236, 231, 221, 0.46);
+  --rule: rgba(236, 231, 221, 0.2);
+  --rule-faint: rgba(236, 231, 221, 0.1);
+  --fill: rgba(236, 231, 221, 0.07);
   --accent: #d4623a;
-  --cyan: #7aa8b4;
+  --cyan: #3699b8;
 
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
+
+html { scroll-padding-top: 72px; }
 
 body {
   margin: 0;
@@ -67,85 +87,155 @@ body {
 
 /* ── page ────────────────────────────────────────────────────────────────── */
 
-.sheet { max-width: 1420px; margin: 0 auto; padding: 20px 26px 64px; }
+.sheet { max-width: 1440px; margin: 0 auto; padding: 0 var(--page) var(--s8); }
 
-/* Everything lives on one page, so the bands do the work that navigation used
-   to: a hairline and a band label say where one subject ends and the next
-   begins, without hiding either of them behind a click. */
-.band {
-  border-top: 1px solid var(--rule);
-  padding-top: 14px;
-  margin-top: 22px;
+.stack { display: flex; flex-direction: column; gap: var(--s1); }
+.row { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s4); flex-wrap: wrap; }
+
+/* The masthead names the station and what it has recorded; everything that acts on
+   the page lives in the bar beneath it. */
+.masthead {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: var(--s4) var(--s6);
+  flex-wrap: wrap; padding: var(--s6) 0 var(--s5);
 }
-.band-first { border-top: 0; margin-top: 16px; padding-top: 0; }
+.masthead h1 { font-family: var(--mono); font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.1; margin: var(--s1) 0 var(--s2); }
+.masthead-actions { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
 
-.grid { display: grid; gap: 26px; }
-@media (min-width: 1080px) {
-  .g-hero { grid-template-columns: 0.95fr 0.95fr 1fr 1.05fr; }
-  .g-3 { grid-template-columns: 1.05fr 1.25fr 1fr; }
-  .g-2 { grid-template-columns: 1.3fr 1fr; }
+/* Held at the top while reading down: the window it sets scopes every number on the
+   sheet, so it has to stay in reach, and so do the two nodes' pulses. */
+.toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; justify-content: space-between; align-items: center; gap: var(--s3) var(--s5); flex-wrap: wrap;
+  padding: var(--s3) 0; background: var(--paper);
+  border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
 }
-@media (min-width: 700px) and (max-width: 1079px) {
-  .g-hero, .g-3, .g-2 { grid-template-columns: 1fr 1fr; }
+.toolbar-group { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.segments { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.segments::-webkit-scrollbar { display: none; }
+.pulse {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); text-decoration: none;
+  padding: 3px 0;
 }
+.pulse:hover { color: var(--ink); }
+.pulse strong { font-weight: 500; color: var(--ink); }
 
-/* Columns are told apart by a hairline in the gutter, not by a card. */
-@media (min-width: 700px) {
-  .grid > * + * { border-left: 1px solid var(--rule-faint); padding-left: 26px; }
+/* ── nodes and their sections ────────────────────────────────────────────── */
+
+/* A node is the largest unit on the page and is ruled like one: a full-weight line
+   under its name, where every lesser division is a hairline. */
+.node { margin-top: var(--s7); }
+.node-head {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: var(--s3) var(--s5); flex-wrap: wrap;
+  padding-bottom: var(--s3); border-bottom: 2px solid var(--ink);
 }
+.node-head h2 { font-family: var(--grot); font-size: 32px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; margin: var(--s1) 0 0; }
+.node-status { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--ink-2); }
+.node-status .pip { vertical-align: -1px; margin-right: 7px; }
 
-/* The access screens are genuinely one small sheet rather than a dense panel,
-   and they set their own width inline. Their two-column split gets no divider:
-   a form and its requirements are one thought, not two subjects. */
-.sheet-narrow { padding-top: 40px; }
-/* The theme control on the screens that have no masthead to hold it. */
-.corner { position: fixed; top: 16px; right: 22px; z-index: 2; }
-.cols { display: grid; gap: 34px; }
-@media (min-width: 900px) { .cols-2 { grid-template-columns: 1.4fr 1fr; } }
+.section { margin-top: var(--s7); }
+.node-head + .section { margin-top: var(--s6); }
+.section-head {
+  display: flex; align-items: baseline; gap: var(--s2) var(--s3); flex-wrap: wrap;
+  padding-bottom: var(--s2); margin-bottom: var(--s5); border-bottom: 1px solid var(--rule);
+}
+.section-head h3 { font-family: var(--grot); font-size: 17px; font-weight: 500; letter-spacing: -0.01em; margin: 0; }
+.section-index { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.section-aside { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
 
-.stack { display: flex; flex-direction: column; gap: 4px; }
-.row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-.spread { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+/* Four columns, everywhere. Tiles take one, charts and tables two, a history four,
+   so the edges line up down the whole sheet whichever section they belong to. */
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s6) var(--gutter); }
+.grid4 + .grid4 { margin-top: var(--s6); }
+.grid4 > * { min-width: 0; }
+.span2 { grid-column: span 2; }
+.span3 { grid-column: span 3; }
+.span4 { grid-column: 1 / -1; }
 
 /* ── type ────────────────────────────────────────────────────────────────── */
 
 .label {
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-2);
   border-bottom: 1px solid var(--rule);
-  padding-bottom: 4px;
-  margin-bottom: 12px;
+  padding-bottom: 5px;
+  margin-bottom: var(--s3);
   display: block;
 }
-.label-plain { border-bottom: 0; padding-bottom: 0; margin-bottom: 4px; }
+.label-plain { border-bottom: 0; padding-bottom: 0; margin-bottom: var(--s1); }
+.eyebrow { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); }
 
 .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.mono-note { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.mono-note { font-family: var(--mono); font-size: 11px; line-height: 1.55; color: var(--ink-2); }
+/* Sentences are set in the grotesque: a paragraph in a monospaced face at eleven
+   pixels is a thing to decode, not to read. */
+.note { font-size: 12.5px; line-height: 1.5; color: var(--ink-2); margin: 0; max-width: 62ch; }
 .dim { color: var(--ink-3); }
 .accent { color: var(--accent); }
 .cyan { color: var(--cyan); }
+.ink { color: var(--ink); }
 
-h1 { font-family: var(--mono); font-size: 21px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+/* ── tiles ───────────────────────────────────────────────────────────────── */
 
-/* Measured values lead; derived ones are set smaller and greyer so no legend
-   has to explain which is which. */
-.reading-primary { font-family: var(--mono); font-size: 68px; line-height: 0.9; font-weight: 500; }
-.reading-secondary { font-family: var(--mono); font-size: 52px; line-height: 0.9; font-weight: 400; }
-.unit { font-family: var(--grot); font-size: 14px; color: var(--ink-2); margin-left: 6px; }
+.tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tile .label { margin-bottom: var(--s2); }
+/* Measured values lead; derived ones are set smaller and greyer so no legend has to
+   explain which is which. One hero per sheet, the room's temperature. */
+.value { font-family: var(--mono); font-size: 34px; line-height: 1; font-weight: 400; letter-spacing: -0.02em; white-space: nowrap; }
+.value-hero { font-size: 68px; font-weight: 500; letter-spacing: -0.04em; }
+.value-major { font-size: 48px; }
+.unit { font-family: var(--grot); font-size: 13px; letter-spacing: 0; color: var(--ink-2); margin-left: 6px; font-weight: 400; }
+.value-hero .unit, .value-major .unit { font-size: 15px; }
+.tile .mono-note, .tile .note { max-width: none; }
+
+/* A meter with a scale under it: the fill is the reading, the hairline border is
+   the range, and nothing is coloured by whether the value is good. */
+.meter { height: 6px; background: var(--fill); border: 1px solid var(--rule-faint); }
+.meter > span { display: block; height: 100%; background: var(--ink-2); }
+.meter-scale { margin: 4px 0 2px; }
+.meter-scale > span { background: var(--accent); }
+
+/* ── figures ─────────────────────────────────────────────────────────────── */
+
+.figure { min-width: 0; }
+.figure-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--s1) var(--s3); flex-wrap: wrap;
+  border-bottom: 1px solid var(--rule); padding-bottom: 5px; margin-bottom: var(--s2);
+}
+.figure-head .label { border: 0; padding: 0; margin: 0; }
+.figure-stack + .figure-stack .figure-head { border-bottom-color: var(--rule-faint); margin-top: var(--s2); }
+/* The value under the cursor, or the latest one: numbers first, their names after. */
+.readout { display: flex; gap: 2px var(--s3); flex-wrap: wrap; justify-content: flex-end; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.readout-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.readout-item b { font-weight: 500; color: var(--ink); }
+.key { display: inline-block; width: 14px; height: 0; border-top: 2px solid; }
+.key-dash { border-top-style: dashed; }
+.figure-foot { margin-top: var(--s2); }
+
+/* ── tables ──────────────────────────────────────────────────────────────── */
+
+table { border-collapse: collapse; width: 100%; }
+td { padding: 6px 0; border-bottom: 1px solid var(--rule-faint); font-size: 13px; vertical-align: baseline; }
+td.v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: var(--s3); }
+.derived td:first-child { color: var(--ink-2); }
+.table-wrap { overflow-x: auto; }
+
+.data { font-family: var(--mono); }
+.data th { text-align: left; font-weight: 400; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+           color: var(--ink-2); padding: 0 var(--s3) 6px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.data td { font-size: 12px; padding: 6px var(--s3) 6px 0; white-space: nowrap; }
+.data .r { text-align: right; }
+.data th:last-child, .data td:last-child { padding-right: 0; }
+
+.revision { display: grid; grid-template-columns: auto 1fr; gap: 5px var(--s4); font-size: 11.5px; align-items: baseline; margin: 0; }
+.revision dt { color: var(--ink-2); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.revision dd { margin: 0; font-family: var(--mono); word-break: break-word; }
 
 .rule { border: 0; border-top: 1px solid var(--rule); margin: 20px 0 14px; }
 .rule-faint { border: 0; border-top: 1px solid var(--rule-faint); margin: 12px 0; }
-
-table { border-collapse: collapse; width: 100%; }
-td { padding: 5px 0; border-bottom: 1px solid var(--rule-faint); font-size: 13px; }
-td.v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.derived td:first-child { color: var(--ink-2); }
-
-.revision { display: grid; grid-template-columns: auto 1fr; gap: 3px 16px; font-size: 11px; align-items: baseline; }
-.revision dt { color: var(--ink-3); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
-.revision dd { margin: 0; font-family: var(--mono); word-break: break-word; }
 
 /* ── controls ────────────────────────────────────────────────────────────── */
 
@@ -158,10 +248,12 @@ button {
   background: none;
   border: 0;
   border-bottom: 1px solid var(--rule);
-  padding: 4px 9px;
+  padding: 5px 10px;
   cursor: pointer;
+  white-space: nowrap;
 }
 button:hover { color: var(--ink); border-bottom-color: var(--ink-2); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button[aria-pressed="true"] { color: var(--ink); border-bottom: 2px solid var(--accent); }
 
 input {
@@ -179,73 +271,74 @@ input:focus { outline: none; border-bottom: 1px solid var(--accent); }
 /* ── status ──────────────────────────────────────────────────────────────── */
 
 .status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
-.pip { width: 7px; height: 7px; border: 1px solid var(--ink-2); display: inline-block; }
+.pip { width: 7px; height: 7px; border: 1px solid var(--ink-2); display: inline-block; flex: none; }
 .pip-on { background: var(--accent); border-color: var(--accent); }
-
-/* ── distribution ────────────────────────────────────────────────────────── */
-
-.dist + .dist { margin-top: 16px; }
-.dist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.dist-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
-.dist-span { font-size: 12px; }
-.dist-foot { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--ink-2); margin-top: 2px; }
-
-/* A completeness bar reads faster than a percentage, and the percentage stays
-   beside it because a bar alone cannot be quoted. */
-.meter { height: 6px; background: var(--fill); border: 1px solid var(--rule-faint); }
-.meter > span { display: block; height: 100%; background: var(--ink-2); }
-
-/* ── phone node ──────────────────────────────────────────────────────────── */
-
-/* Three named groups inside the band. The heading is set larger than a tile's label
-   and smaller than the masthead, numbered like the plates of a printed report, with
-   the instruments behind the group set small on the right. */
-.phone-section { margin-top: 30px; }
-.section-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-                border-bottom: 1px solid var(--rule); padding-bottom: 7px; margin-bottom: 16px; }
-.section-head h3 { font-family: var(--grot); font-size: 17px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
-.section-index { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
-.section-sources { margin-left: auto; }
-
-.phone-tiles { display: grid; gap: 22px 26px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.phone-tiles > * { min-width: 0; }
-.phone-charts { display: grid; gap: 22px 26px; margin-top: 22px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
-.phone-charts > * { min-width: 0; }
-
-/* A meter with a scale under it: the fill is the reading, the hairline border is
-   the range, and nothing is coloured by whether the value is good. */
-.meter-scale { margin: 6px 0 2px; }
-.meter-scale > span { background: var(--accent); }
-.ink { color: var(--ink); }
-
-/* A chart or a drawing beside the table or chart that completes it. */
-.phone-pair { display: grid; gap: 22px 26px; margin-top: 22px; }
-@media (min-width: 1080px) { .phone-pair { grid-template-columns: 3fr 2fr; } }
-.phone-pair > * { min-width: 0; }
-.track { width: 100%; height: auto; display: block; margin-top: 8px; }
-
-/* Signal over the window, divided in the colours the track's dots use. */
-.coverage { display: flex; height: 6px; margin: 6px 0 2px; border: 1px solid var(--rule-faint); }
-.coverage > span { display: block; min-width: 2px; }
-
-.events { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); }
-.events th { text-align: left; font-weight: 400; font-size: 10px; letter-spacing: 0.1em;
-             text-transform: uppercase; color: var(--ink-3); padding: 4px 8px 4px 0;
-             border-bottom: 1px solid var(--rule); }
-.events td { font-size: 12px; padding: 5px 8px 5px 0; white-space: nowrap; }
-
-/* ── alerts ──────────────────────────────────────────────────────────────── */
 
 /* One line per open alert, above everything else and quiet about it: a rule in
    the accent colour and the sentence the evaluator wrote, not a modal or a siren. */
-.alert-band { border-left: 3px solid var(--accent); padding: 8px 12px; margin-top: 14px;
+.alert-band { border-left: 3px solid var(--accent); padding: 8px 12px; margin-top: var(--s4);
               background: var(--fill); display: flex; flex-wrap: wrap; gap: 4px 14px;
               align-items: baseline; }
 .alert-band + .alert-band { margin-top: 6px; }
 .alert-band strong { font-weight: 500; color: var(--ink); }
 
+/* ── distribution ────────────────────────────────────────────────────────── */
+
+.dist + .dist { margin-top: var(--s5); }
+.dist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.dist-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+.dist-span { font-size: 12px; }
+.dist-foot { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+
+/* ── phone ───────────────────────────────────────────────────────────────── */
+
+.track { width: 100%; height: auto; display: block; }
+
+/* Signal over the window, divided in the colours the track's dots use. */
+.coverage { display: flex; gap: 2px; height: 6px; margin: 4px 0 2px; }
+.coverage > span { display: block; min-width: 2px; }
+
 /* uPlot draws its own furniture; these bring it onto the same page. */
 .uplot, .u-wrap { font-family: var(--mono) !important; }
-.u-legend { font-family: var(--mono) !important; font-size: 11px !important; color: var(--ink-2); }
-.u-legend .u-marker { border-width: 2px !important; }
 .u-select { background: var(--fill) !important; }
+
+/* ── access screens ──────────────────────────────────────────────────────── */
+
+/* The access screens are genuinely one small sheet rather than a dense panel,
+   and they set their own width inline. Their two-column split gets no divider:
+   a form and its requirements are one thought, not two subjects. */
+.sheet-narrow { padding-top: 40px; }
+/* The theme control on the screens that have no masthead to hold it. */
+.corner { position: fixed; top: 16px; right: 22px; z-index: 6; }
+.cols { display: grid; gap: 34px; }
+@media (min-width: 900px) { .cols-2 { grid-template-columns: 1.4fr 1fr; } }
+
+/* ── narrower sheets ─────────────────────────────────────────────────────── */
+
+@media (max-width: 1080px) {
+  .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .span3, .span4 { grid-column: 1 / -1; }
+  .value-hero { font-size: 60px; }
+}
+
+@media (max-width: 700px) {
+  :root { --page: 16px; --gutter: 16px; }
+  html { scroll-padding-top: 108px; }
+  .masthead { padding-top: var(--s5); }
+  .masthead h1 { font-size: 26px; }
+  .toolbar { gap: var(--s2) var(--s4); }
+  .toolbar-group { width: 100%; }
+  .node { margin-top: var(--s6); }
+  .node-head h2 { font-size: 26px; }
+  .section { margin-top: var(--s6); }
+  .section-head { margin-bottom: var(--s4); }
+  .section-aside { margin-left: 0; width: 100%; }
+  .grid4 { gap: var(--s5) var(--gutter); }
+  .grid4 + .grid4 { margin-top: var(--s5); }
+  /* Numbers still pair up two to a row on a phone; a table or a drawing does not
+     survive half a phone's width and takes the whole of it. */
+  .span2, .grid4 > .figure { grid-column: 1 / -1; }
+  .value { font-size: 26px; }
+  .value-major { font-size: 38px; }
+  .value-hero { font-size: 52px; }
+}

@@ -73,11 +73,11 @@ export function Track({ points, accuracy }: { points: Fix[]; accuracy: number | 
 
         <g transform={`translate(${W - PAD} ${PAD + 4})`}>
           <path d="M0 -12 L4 0 L-4 0 Z" fill="var(--ink-2)" />
-          <text y="12" textAnchor="middle" fontSize="9" fontFamily="var(--mono)" fill="var(--ink-2)">N</text>
+          <text y="12" textAnchor="middle" fontSize="12" fontFamily="var(--mono)" fill="var(--ink-2)">N</text>
         </g>
         <g transform={`translate(${PAD} ${H - PAD / 2})`}>
           <line x1="0" x2={bar * scale} y1="0" y2="0" stroke="var(--ink-2)" strokeWidth="1.5" />
-          <text x={bar * scale + 6} y="3.5" fontSize="9" fontFamily="var(--mono)" fill="var(--ink-2)">
+          <text x={bar * scale + 6} y="3.5" fontSize="12" fontFamily="var(--mono)" fill="var(--ink-2)">
             {bar >= 1000 ? `${bar / 1000} km` : `${bar} m`}
           </text>
         </g>

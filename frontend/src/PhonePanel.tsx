@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Compass } from "./Compass";
-import { SeriesChart, type Trace } from "./SeriesChart";
+import { Node, Panel, Pip, Section, Tile } from "./layout";
+import { SeriesChart, type ChartPanel } from "./SeriesChart";
 import { CoverageBar, Track } from "./Track";
 import { findGaps } from "./series";
 import {
@@ -18,33 +19,32 @@ import {
 // nodes in one room read against two different stretches of time would invite
 // comparisons between things that did not happen together.
 //
-// Grouped by what the readings are about rather than by sensor, each group with its
-// numbers above their history: the air around the phone, the phone's own movement,
-// and where it is and how well it is connected. Nine tiles in one grid and six
-// charts in another read as an inventory; three named groups read as a record.
+// Grouped by what the readings are about rather than by sensor: the air around the
+// phone, the phone's own movement, and where it is and how well it is connected.
+// Each group sets its numbers on the sheet's four columns and its charts two columns
+// wide beneath them, so every edge lines up with the room's above.
 
-const PRESSURE: Trace[] = [
-  { key: "pressure_hpa", label: "pressure", unit: "hPa", color: "--accent", digits: 2 },
+const ENVIRONMENT: ChartPanel[][] = [
+  [{ title: "Pressure", traces: [{ key: "pressure_hpa", label: "pressure", unit: "hPa", color: "--accent", digits: 2 }] }],
+  [{ title: "Height change · from the barometer", traces: [{ key: "height_m", label: "height change", unit: "m", color: "--accent", digits: 1 }] }],
+  [{ title: "Light", traces: [{ key: "illuminance_lux", label: "light", unit: "lx", color: "--accent", digits: 0 }] }],
+  [{
+    title: "Noise · A-weighted", traces: [
+      { key: "noise_laeq_dbfs", label: "LAeq", unit: "dBFS", color: "--accent", digits: 1 },
+      { key: "noise_l10_dbfs", label: "L10", unit: "dBFS", color: "--ink-2", digits: 1, dash: [4, 3] },
+      { key: "noise_l90_dbfs", label: "L90", unit: "dBFS", color: "--cyan", digits: 1, dash: [4, 3] },
+    ],
+  }],
 ];
-const HEIGHT: Trace[] = [
-  { key: "height_m", label: "height change", unit: "m", color: "--accent", digits: 1 },
+// Acceleration and rotation, and signal and round trip, are different units: two
+// plots on one time axis rather than one plot with a scale on each side.
+const MOTION: ChartPanel[] = [
+  { title: "Acceleration · gravity removed", height: 130, traces: [{ key: "accel_rms", label: "acceleration", unit: "m/s²", color: "--accent", digits: 3 }] },
+  { title: "Rotation", height: 110, traces: [{ key: "gyro_rms", label: "rotation", unit: "rad/s", color: "--cyan", digits: 3 }] },
 ];
-const LIGHT_SOUND: Trace[] = [
-  { key: "illuminance_lux", label: "light", unit: "lx", color: "--accent", digits: 0 },
-  { key: "sound_rms_dbfs", label: "sound", unit: "dBFS", color: "--cyan", digits: 1, axis: "right" },
-];
-const NOISE: Trace[] = [
-  { key: "noise_laeq_dbfs", label: "LAeq", unit: "dBFS(A)", color: "--accent", digits: 1 },
-  { key: "noise_l10_dbfs", label: "L10", unit: "dBFS(A)", color: "--ink-2", digits: 1, dash: [4, 3] },
-  { key: "noise_l90_dbfs", label: "L90", unit: "dBFS(A)", color: "--cyan", digits: 1, dash: [4, 3] },
-];
-const MOTION: Trace[] = [
-  { key: "accel_rms", label: "acceleration", unit: "m/s²", color: "--accent", digits: 3 },
-  { key: "gyro_rms", label: "rotation", unit: "rad/s", color: "--cyan", digits: 3, axis: "right" },
-];
-const RADIO: Trace[] = [
-  { key: "cell_rsrp_dbm", label: "RSRP", unit: "dBm", color: "--accent", digits: 0 },
-  { key: "net_rtt_ms", label: "round trip", unit: "ms", color: "--cyan", digits: 0, axis: "right" },
+const RADIO: ChartPanel[] = [
+  { title: "Signal · RSRP", height: 150, traces: [{ key: "cell_rsrp_dbm", label: "RSRP", unit: "dBm", color: "--accent", digits: 0 }] },
+  { title: "Broker round trip", height: 110, traces: [{ key: "net_rtt_ms", label: "round trip", unit: "ms", color: "--cyan", digits: 0 }] },
 ];
 
 const BANDS: SignalBand[] = ["excellent", "good", "fair", "poor"];
@@ -64,52 +64,7 @@ const secondsSince = (iso: string) => (Date.now() - Date.parse(iso)) / 1000;
 const clock = (iso: string) =>
   new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-/** One subject of the phone's record, under its name, with the instruments behind it set small. */
-function Section({ index, title, sources, children }: {
-  index: string; title: string; sources: string; children: ReactNode;
-}) {
-  const id = useId();
-  return (
-    <section className="phone-section" aria-labelledby={id}>
-      <div className="section-head">
-        <span className="section-index">{index}</span>
-        <h3 id={id}>{title}</h3>
-        <span className="mono-note section-sources">{sources}</span>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/** A labelled number with its unit, and whatever must be said beside it. */
-function Tile({ label, value, unit, children }: {
-  label: string; value: string; unit: string; children?: ReactNode;
-}) {
-  return (
-    <div className="stack">
-      <span className="label">{label}</span>
-      <div>
-        <span className="reading-secondary">{value}</span>
-        <span className="unit">{unit}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/** A chart with its label, and a note under it when the chart needs one. */
-function Plot({ label, note, children }: { label: string; note?: string; children: ReactNode }) {
-  return (
-    <div>
-      <span className="label">{label}</span>
-      {children}
-      {note && <span className="mono-note">{note}</span>}
-    </div>
-  );
-}
-
 type Props = { from: string; hours: number; theme: string };
-type ChartRows = Parameters<typeof SeriesChart>[0]["points"];
 
 export function PhonePanel({ from, hours, theme }: Props) {
   const [current, setCurrent] = useState<PhoneCurrent | null>(null);
@@ -176,28 +131,30 @@ export function PhonePanel({ from, hours, theme }: Props) {
     return () => ws.close();
   }, [hours]);
 
-  const points = series?.points ?? [];
+  const points = useMemo(() => series?.points ?? [], [series]);
   const gaps = useMemo(() => (series ? findGaps(series.points, series.bucket) : []), [series]);
-  const cover = useMemo(() => coverage(series?.points ?? []), [series]);
+  const cover = useMemo(() => coverage(points), [points]);
   const dominant = dominantBand(cover);
 
   // Height change needs a reference, and the first pressure in the window is the
   // only one that means "since the start of what you are looking at".
   const heightPoints = useMemo(() => {
-    const pts = series?.points ?? [];
-    const ref = pts.find((p) => p.pressure_hpa !== null)?.pressure_hpa ?? null;
-    return pts.map((p) => ({
+    const ref = points.find((p) => p.pressure_hpa !== null)?.pressure_hpa ?? null;
+    return points.map((p) => ({
       t: p.t,
       height_m: ref === null || p.pressure_hpa === null ? null : heightChange(p.pressure_hpa, ref),
     }));
-  }, [series]);
+  }, [points]);
+
+  const eyebrow = "Node 02 · Galaxy S26 · contract v2";
 
   if (missing) {
     return (
-      <div className="band">
-        <span className="label label-plain">Phone node · Galaxy S26 · contract v2</span>
-        <span className="mono-note">No samples yet. Start the node app on the phone, or run python -m psychron.simulate.</span>
-      </div>
+      <Node id="phone" eyebrow={eyebrow} title="Phone">
+        <p className="note" style={{ marginTop: 24 }}>
+          No samples yet. Start the node app on the phone, or run python -m psychron.simulate.
+        </p>
+      </Node>
     );
   }
 
@@ -213,38 +170,31 @@ export function PhonePanel({ from, hours, theme }: Props) {
   const lastEvent = events[0] ?? null;
   const largest = events.reduce<PhoneEvent | null>((m, e) => (m === null || e.pga_ms2 > m.pga_ms2 ? e : m), null);
   const bucket = series?.bucket ?? "2s";
-  const chart = (traces: Trace[], data: ChartRows = points) =>
-    <SeriesChart points={data} bucket={bucket} traces={traces} theme={theme} />;
+  const hasPoints = points.length > 0;
 
   return (
-    <div className="band">
-      <div className="spread">
-        <div>
-          <span className="label label-plain">Phone node · Galaxy S26 · contract v2</span>
-          <span className="mono-note">
-            two-second window summaries
-            {series && ` · grouped at ${series.bucket} · ${series.count} points`}
-            {gaps.length > 0 && ` · ${gaps.length} gap${gaps.length > 1 ? "s" : ""}`}
-          </span>
-        </div>
-        <span className="status">
-          <span className={`pip${reporting ? " pip-on" : ""}`} />
-          {current ? (reporting ? "Phone reporting" : "Phone silent") : "Phone never seen"}
-          {age !== null && ` · ${Math.max(0, age).toFixed(0)} s ago`}
-          {current && ` · ${current.firmware}`}
-          {current?.net_via && ` · via ${current.net_via === "cell" ? "mobile data" : current.net_via}${current.net_vpn ? " + VPN" : ""}`}
-          {/* The one number most likely to be misread as the room's: named for the battery. */}
-          {current?.battery_temp_c != null && ` · battery ${current.battery_temp_c.toFixed(1)} °C`}
-        </span>
-      </div>
+    <Node id="phone" eyebrow={eyebrow} title="Phone"
+          status={<>
+            <Pip on={reporting} />
+            {current ? (reporting ? "Reporting" : "Silent") : "Never seen"}
+            {age !== null && ` · ${Math.max(0, age).toFixed(0)} s ago`}
+            {current && ` · ${current.firmware}`}
+            {current?.net_via && ` · via ${current.net_via === "cell" ? "mobile data" : current.net_via}${current.net_vpn ? " + VPN" : ""}`}
+            {/* The one number most likely to be misread as the room's: named for the battery. */}
+            {current?.battery_temp_c != null && ` · battery ${current.battery_temp_c.toFixed(1)} °C`}
+          </>}>
 
-      <Section index="01" title="Environment" sources="barometer · ambient light · microphone">
-        <div className="phone-tiles">
+      <Section index="01" title="Environment"
+               aside={series && <>
+                 barometer · light · microphone · {series.count.toLocaleString("en-GB")} windows at {series.bucket}
+                 {gaps.length > 0 && ` · ${gaps.length} gap${gaps.length > 1 ? "s" : ""}`}
+               </>}>
+        <div className="grid4">
           <Tile label="Pressure · station" value={fmt(current?.pressure_hpa, 1)} unit="hPa">
             {/* Station pressure, at the phone's altitude. A forecast quotes it
                 reduced to sea level, so 956 hPa beside a weather site's 1015 reads
                 as a faulty sensor unless the panel says which one this is. */}
-            <span className="mono-note">at the phone, not reduced to sea level</span>
+            <span className="note">At the phone, not reduced to sea level.</span>
             <span className="mono-note">
               {tendency === null
                 ? "no reading 3 h ago"
@@ -252,23 +202,23 @@ export function PhonePanel({ from, hours, theme }: Props) {
             </span>
           </Tile>
 
-          <Tile label="Outlook · sea level · Zambretti" value={fmt(current?.sea_level_pressure_hpa, 1)} unit="hPa">
-            <span className="mono-note">
+          <Tile label="Outlook · Zambretti" value={fmt(current?.sea_level_pressure_hpa, 1)} unit="hPa sea level">
+            <span className="note">
               {current?.outlook
                 ? <><span className="ink">{current.outlook.text}</span> · {current.outlook.trend}</>
                 : current?.sea_level_pressure_hpa == null
-                  ? "needs an altitude: a GNSS fix within ±20 m, or PSYCHRON_STATION_ELEVATION_M"
-                  : "needs three hours of pressure"}
+                  ? "Needs an altitude: a GNSS fix within ±20 m, or PSYCHRON_STATION_ELEVATION_M."
+                  : "Needs three hours of pressure."}
             </span>
             {/* Named for what it is. A pressure rule of thumb from 1915 is right
                 often enough to be interesting and no more. */}
             <span className="mono-note">
-              {current?.altitude_m != null && `reduced from ${current.altitude_m.toFixed(0)} m (${current.altitude_source}) · `}
-              a pocket forecaster from 1915, ~12 h
+              {current?.altitude_m != null && `from ${current.altitude_m.toFixed(0)} m (${current.altitude_source}) · `}
+              a 1915 pocket forecaster, ~12 h
             </span>
           </Tile>
 
-          <Tile label="Light · ambient sensor" value={fmt(current?.illuminance_lux, 0)} unit="lx">
+          <Tile label="Light · ambient" value={fmt(current?.illuminance_lux, 0)} unit="lx">
             <div className="meter meter-scale" title="Logarithmic, 0.1 lx to 100 000 lx">
               <span style={{ width: `${luxPosition(current?.illuminance_lux ?? 0) * 100}%` }} />
             </div>
@@ -276,7 +226,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
           </Tile>
 
           <Tile label="Noise · A-weighted" value={fmt(noiseValue ?? current?.sound_rms_dbfs, 1)}
-                unit={noiseValue != null ? (calibrated ? "dB(A)" : "dBFS(A)") : "dBFS"}>
+                unit={noiseValue != null ? (calibrated ? "dB(A)" : "dBFS") : "dBFS"}>
             <div className="meter meter-scale">
               <span style={{ width: `${levelPosition(current?.noise_laeq_dbfs ?? current?.sound_rms_dbfs ?? -90) * 100}%` }} />
             </div>
@@ -287,93 +237,96 @@ export function PhonePanel({ from, hours, theme }: Props) {
             </span>
             {/* Stated on the panel, not only in the contract: the number will be
                 read as loudness by anyone who does not know otherwise. */}
-            <span className="mono-note">
+            <span className="note">
               {calibrated
-                ? `calibrated, offset ${current!.spl_offset_db!.toFixed(1)} dB · no audio leaves the phone`
-                : "relative to full scale, not dB SPL · no audio leaves the phone"}
+                ? `Calibrated, offset ${current!.spl_offset_db!.toFixed(1)} dB. No audio leaves the phone.`
+                : "Relative to full scale, not dB SPL. No audio leaves the phone."}
             </span>
           </Tile>
         </div>
 
-        {points.length > 0 && (
-          <div className="phone-charts">
-            <Plot label="Pressure">{chart(PRESSURE)}</Plot>
-            <Plot label="Height change · from the barometer"
-                  note="since the start of the window · a storey is ~3 m · over hours this is weather, not height">
-              {chart(HEIGHT, heightPoints)}
-            </Plot>
-            <Plot label="Light and sound">{chart(LIGHT_SOUND)}</Plot>
-            <Plot label="Noise · LAeq, L10, L90">{chart(NOISE)}</Plot>
+        {hasPoints && (
+          <div className="grid4">
+            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[0]} theme={theme} /></div>
+            <div className="span2">
+              <SeriesChart points={heightPoints} bucket={bucket} panels={ENVIRONMENT[1]} theme={theme} />
+              <p className="note figure-foot">Since the start of the window. A storey is about 3 m; over hours this is weather, not height.</p>
+            </div>
+            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[2]} theme={theme} /></div>
+            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[3]} theme={theme} /></div>
           </div>
         )}
       </Section>
 
-      <Section index="02" title="Motion" sources="accelerometer · gyroscope · magnetometer">
-        <div className="phone-tiles">
+      <Section index="02" title="Motion" aside="accelerometer · gyroscope · magnetometer">
+        <div className="grid4">
           <Tile label="Motion · gravity removed" value={fmt(current?.accel_rms, 2)} unit="m/s²">
             <span className="mono-note">
               rotation {fmt(current?.gyro_rms, 3)} rad/s · {current ? (isMoving(current.accel_rms, current.gyro_rms) ? "moving" : "still") : "—"}
             </span>
-            <span className="mono-note">peak {fmt(current?.accel_peak, 2)} m/s² in the latest window</span>
+            <span className="mono-note">peak {fmt(current?.accel_peak, 2)} m/s² this window</span>
           </Tile>
 
-          <div className="stack phone-compass">
+          <div className="tile">
             <span className="label">Heading · magnetometer</span>
-            <div className="row" style={{ alignItems: "center", gap: 14 }}>
-              <Compass heading={current?.heading_deg ?? null} size={96} />
+            <div className="row" style={{ alignItems: "center", gap: 16, flexWrap: "nowrap" }}>
+              <Compass heading={current?.heading_deg ?? null} size={92} />
               <div className="stack">
-                <span className="num" style={{ fontSize: 22 }}>{fmt(current?.heading_deg, 0)}°</span>
-                <span className="mono-note">magnetic north</span>
-                <span className="mono-note">{fmt(current?.magnetic_ut, 1)} µT</span>
+                <div className="value">{fmt(current?.heading_deg, 0)}°</div>
+                <span className="mono-note">magnetic north · {fmt(current?.magnetic_ut, 1)} µT</span>
               </div>
             </div>
           </div>
 
-          <Tile label="Vibration · seismic trigger" value={String(events.length)}
+          <Tile label="Vibration · seismic trigger" span={2} value={String(events.length)}
                 unit={events.length === 1 ? "event in the window" : "events in the window"}>
             <span className="mono-note">
               {lastEvent
                 ? `last ${lastEvent.pga_ms2.toFixed(2)} m/s² · ${describeShake(lastEvent.pga_ms2)} · ${agoWords(secondsSince(lastEvent.time))} ago`
                 : "none in this window"}
+              {largest && events.length > 1 && ` · largest ${largest.pga_ms2.toFixed(2)} m/s² at ${clock(largest.time)}`}
             </span>
-            <span className="mono-note">
-              {largest && events.length > 1
-                ? `largest ${largest.pga_ms2.toFixed(2)} m/s² at ${clock(largest.time)}`
-                : "fires when shaking stands ×4 above the background, phone lying still"}
+            <span className="note">
+              Fires when the shaking stands four times above the background while the phone lies still.
+              A knock on the table it lies on is enough.
             </span>
           </Tile>
         </div>
 
-        <div className="phone-pair">
-          {points.length > 0 ? <Plot label="Motion">{chart(MOTION)}</Plot> : <div />}
-          <div>
-            <span className="label">Vibration events</span>
-            {events.length === 0
-              ? <p className="mono-note">None in this window. A knock on the table the phone lies on is enough to raise one.</p>
-              : (
-                <table className="events">
-                  <thead>
-                    <tr><th>start</th><th>peak</th><th>for</th><th>freq</th><th>above bg</th></tr>
-                  </thead>
-                  <tbody>
-                    {events.slice(0, 10).map((e) => (
-                      <tr key={e.time}>
-                        <td>{clock(e.time)}</td>
-                        <td>{e.pga_ms2.toFixed(2)} m/s²</td>
-                        <td>{(e.duration_ms / 1000).toFixed(1)} s</td>
-                        <td>{e.freq_hz === null ? "—" : `${e.freq_hz.toFixed(0)} Hz`}</td>
-                        <td>×{e.sta_lta.toFixed(1)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+        <div className="grid4">
+          <div className="span2">
+            {hasPoints ? <SeriesChart points={points} bucket={bucket} panels={MOTION} theme={theme} />
+              : <p className="note">No windows in this range.</p>}
           </div>
+          <Panel label="Vibration events" span={2} aside={events.length > 10 ? `latest 10 of ${events.length}` : undefined}>
+            {events.length === 0
+              ? <p className="note">None in this window.</p>
+              : (
+                <div className="table-wrap">
+                  <table className="data">
+                    <thead>
+                      <tr><th>start</th><th className="r">peak</th><th className="r">for</th><th className="r">pitch</th><th className="r">above bg</th></tr>
+                    </thead>
+                    <tbody>
+                      {events.slice(0, 10).map((e) => (
+                        <tr key={e.time}>
+                          <td>{clock(e.time)}</td>
+                          <td className="r">{e.pga_ms2.toFixed(2)} m/s²</td>
+                          <td className="r">{(e.duration_ms / 1000).toFixed(1)} s</td>
+                          <td className="r">{e.freq_hz === null ? "—" : `${e.freq_hz.toFixed(0)} Hz`}</td>
+                          <td className="r">×{e.sta_lta.toFixed(1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+          </Panel>
         </div>
       </Section>
 
-      <Section index="03" title="Position and coverage" sources="GNSS · modem · broker link">
-        <div className="phone-tiles">
+      <Section index="03" title="Position and coverage" aside="GNSS · modem · broker link">
+        <div className="grid4">
           <Tile label="Altitude · GNSS" value={fmt(fix?.alt_msl_m, 0)} unit="m">
             <span className="mono-note">
               {fix === null
@@ -382,7 +335,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
             </span>
             <span className="mono-note">
               {fix?.speed_ms != null && `${(fix.speed_ms * 3.6).toFixed(1)} km/h · `}
-              {fix !== null && `±${fmt(fix.loc_acc_m, 0)} m across · `}coordinates stay on the track
+              {fix !== null && `±${fmt(fix.loc_acc_m, 0)} m across`}
             </span>
           </Tile>
 
@@ -390,7 +343,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
             <span className="mono-note">
               {rsrp === null
                 ? "no serving cell reported"
-                : <><span style={{ color: bandColor(signalBand(rsrp)) }}>{signalBand(rsrp)}</span>{carrier && ` · ${carrier}`}</>}
+                : <><span style={{ color: bandColor(signalBand(rsrp)) }}>■</span> {signalBand(rsrp)}{carrier && ` · ${carrier}`}</>}
             </span>
             <span className="mono-note">
               RSRQ {fmt(current?.cell_rsrq_db, 0)} dB · SINR {fmt(current?.cell_sinr_db, 0)} dB
@@ -398,21 +351,14 @@ export function PhonePanel({ from, hours, theme }: Props) {
             </span>
           </Tile>
 
-          <Tile label="Coverage · over the window"
+          <Tile label="Coverage · over the window" span={2}
                 value={dominant ? (dominant.share * 100).toFixed(0) : "—"}
-                unit={dominant ? `% ${dominant.band}` : "%"}>
+                unit={dominant ? `% of the window ${dominant.band}` : "%"}>
             <CoverageBar coverage={cover} />
-            {/* The split, when there is one to read: a single band is already the number above. */}
-            {BANDS.filter((b) => cover.shares[b] > 0).length > 1 && (
-              <span className="mono-note">
-                {BANDS.filter((b) => cover.shares[b] > 0)
-                  .map((b) => `${b} ${(cover.shares[b] * 100).toFixed(0)} %`).join(" · ")}
-              </span>
-            )}
             <span className="mono-note">
-              {cover.carriers.length
-                ? cover.carriers.slice(0, 3).map((c) => `${c.label} ${(c.share * 100).toFixed(0)} %`).join(" · ")
-                : "no carrier reported"}
+              {BANDS.filter((b) => cover.shares[b] > 0)
+                .map((b) => `${b} ${(cover.shares[b] * 100).toFixed(0)} %`).join(" · ") || "no serving cell"}
+              {cover.carriers.length > 0 && ` · ${cover.carriers.slice(0, 3).map((c) => `${c.label} ${(c.share * 100).toFixed(0)} %`).join(", ")}`}
             </span>
             <span className="mono-note">
               {cover.changes} carrier change{cover.changes === 1 ? "" : "s"}
@@ -421,14 +367,16 @@ export function PhonePanel({ from, hours, theme }: Props) {
           </Tile>
         </div>
 
-        <div className="phone-pair">
-          <div>
-            <span className="label">Track · coloured by signal</span>
+        <div className="grid4">
+          <Panel label="Track · coloured by signal" span={2}>
             <Track points={points} accuracy={fix?.loc_acc_m ?? null} />
+          </Panel>
+          <div className="span2">
+            {hasPoints ? <SeriesChart points={points} bucket={bucket} panels={RADIO} theme={theme} />
+              : <p className="note">No windows in this range.</p>}
           </div>
-          {points.length > 0 ? <Plot label="Signal and latency">{chart(RADIO)}</Plot> : <div />}
         </div>
       </Section>
-    </div>
+    </Node>
   );
 }
