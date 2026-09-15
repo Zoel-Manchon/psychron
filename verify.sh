@@ -76,7 +76,11 @@ rule "Transport"
 if docker compose -f infra/docker-compose.yml ps --status running 2>/dev/null | grep -q broker; then
   if (cd infra && MSYS_NO_PATHCONV=1 ./check-mtls.sh > /tmp/psychron-mtls.$$ 2>&1); then
     grep -E '^  (OK|FAIL)' /tmp/psychron-mtls.$$ | sed 's/^/      /'
-    ok "16 assertions: ACLs, forged CN, unknown CA, phone fencing, alert direction, 1883 closed"
+    # Counted rather than stated: the revocation check only runs once there is a
+    # revoked certificate to present.
+    n=$(grep -c '^  OK' /tmp/psychron-mtls.$$)
+    revoked=$(grep -q 'revoked' /tmp/psychron-mtls.$$ && echo ', revocation' || true)
+    ok "$n assertions: ACLs, forged CN, unknown CA${revoked}, phone fencing, alert direction, 1883 closed"
   else
     sed 's/^/      /' /tmp/psychron-mtls.$$
     no "mTLS assertions"

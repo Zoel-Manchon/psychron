@@ -129,17 +129,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backfill", type=float, default=0.0,
                     help="hours of history to publish before going live")
     ap.add_argument("--count", type=int, default=0, help="stop after N live windows (0 = forever)")
+    ap.add_argument("--cert-dir", default=None,
+                    help="where <device>.crt and <device>.key are, if not infra/certs")
     args = ap.parse_args(argv)
 
     env = load_env()
     certs = Path(env.get("PSYCHRON_CERT_DIR", str(DEFAULT_ENV.parent / "certs")))
+    identity = Path(args.cert_dir) if args.cert_dir else certs
     host = env.get("PSYCHRON_MQTT_HOST", "127.0.0.1")
+    if not (identity / f"{args.device}.key").exists():
+        # A phone enrolled with a hardware key leaves the host with no key for it,
+        # deliberately. The simulator can still speak as it, for a day at a time.
+        raise SystemExit(
+            f"no {identity / (args.device + '.key')}: if the phone has enrolled a hardware key, mint a "
+            f"one-day credential with infra/ephemeral-cert.sh {args.device} <dir> and pass --cert-dir <dir>")
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                          client_id=f"{args.device}-sim-{secrets.token_hex(3)}")
     client.tls_set(ca_certs=str(certs / "ca.crt"),
-                   certfile=str(certs / f"{args.device}.crt"),
-                   keyfile=str(certs / f"{args.device}.key"),
+                   certfile=str(identity / f"{args.device}.crt"),
+                   keyfile=str(identity / f"{args.device}.key"),
                    tls_version=ssl.PROTOCOL_TLS_CLIENT)
     client.connect(host, int(env.get("PSYCHRON_MQTT_PORT", "8883")), keepalive=30)
     client.loop_start()

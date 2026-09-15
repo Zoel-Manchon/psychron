@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# Load the phone node's identity onto a connected phone, over USB.
+# Enrol the phone node: its key is generated in the phone's secure hardware, and the
+# host only ever sees — and signs — a request for it.
 #
-# The key never enters the APK and never touches shared storage for longer than
-# the copy takes: it goes to /data/local/tmp, is copied by the app's own uid into
-# its private directory, and the temporary copy is deleted before this exits —
-# also when a step fails, through the trap below.
+#   1. The app is asked to generate a P-256 key in StrongBox (the TEE if the phone
+#      has none) and to write a PKCS#10 request for it.
+#   2. The request is pulled over adb and checked here: its signature, its subject,
+#      its curve. A request that fails any of them is refused, not signed.
+#   3. The CA signs it into certs/<device>.device.crt, and three public files are
+#      pushed back: the CA, the certificate and where the broker is.
 #
-# Requires a debug build installed (run-as only works on debuggable apps) and
-# USB debugging enabled on the phone.
+# Nothing secret crosses the cable in either direction. The app deletes the file key
+# an older provisioning pushed as soon as it connects with the hardware one; revoke
+# that file key's certificate afterwards, as the last line printed says.
+#
+# Requires a debug build installed (run-as only works on debuggable apps) and USB or
+# wireless debugging enabled. Under Git Bash, run with MSYS_NO_PATHCONV=1.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -28,15 +35,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f "certs/$DEVICE.key" ] || { echo "no certs/$DEVICE.key: run ./make-certs.sh first" >&2; exit 1; }
-"$ADB" get-state >/dev/null 2>&1 || { echo "no phone on adb: connect it and allow USB debugging" >&2; exit 1; }
+die() { echo "$*" >&2; exit 1; }
+
+[ -f certs/ca.key ] && [ -f certs/ext.cnf ] || die "no CA: run ./make-certs.sh first"
+"$ADB" get-state >/dev/null 2>&1 || die "no phone on adb: connect it and allow USB debugging"
 
 env_value() { sed -n "s/^$1=\([^ #]*\).*/\1/p" .env | head -1; }
 HOST=$(env_value PSYCHRON_MQTT_HOST)
-[ -n "$HOST" ] && [ "$HOST" != "127.0.0.1" ] || {
-  echo "PSYCHRON_MQTT_HOST in .env must be this machine's LAN address; the phone cannot reach 127.0.0.1" >&2
-  exit 1
-}
+[ -n "$HOST" ] && [ "$HOST" != "127.0.0.1" ] ||
+  die "PSYCHRON_MQTT_HOST in .env must be this machine's LAN address; the phone cannot reach 127.0.0.1"
 # Optional: an address that reaches this host from mobile data. The phone tries
 # it first whenever it is not on Wi-Fi. It must already be in the broker's
 # certificate, or every connection to it fails hostname verification — which is
@@ -44,25 +51,48 @@ HOST=$(env_value PSYCHRON_MQTT_HOST)
 REMOTE=$(env_value PSYCHRON_MQTT_REMOTE_HOST)
 HOSTS="$HOST"
 if [ -n "$REMOTE" ]; then
-  if ! openssl x509 -in certs/broker.crt -noout -ext subjectAltName | grep -qE "(IP Address|DNS):${REMOTE//./\\.}(,|$)"; then
-    echo "certs/broker.crt does not name $REMOTE: run ./make-certs.sh, then docker compose restart broker" >&2
-    exit 1
-  fi
+  openssl x509 -in certs/broker.crt -noout -ext subjectAltName | grep -qE "(IP Address|DNS):${REMOTE//./\\.}(,|$)" ||
+    die "certs/broker.crt does not name $REMOTE: run ./make-certs.sh, then docker compose restart broker"
   HOSTS="$HOST,$REMOTE"
 fi
 
-# The key as issued is SEC1 ("EC PRIVATE KEY"). Java's KeyFactory reads PKCS#8, so
-# it is converted here rather than parsed by hand on the phone.
-openssl pkcs8 -topk8 -nocrypt -in "certs/$DEVICE.key" -out "$TMP_LOCAL/client.pk8"
-cp "certs/ca.crt" "$TMP_LOCAL/ca.crt"
-cp "certs/$DEVICE.crt" "$TMP_LOCAL/client.crt"
+# ── 1. a key in the phone's hardware, and a request for it ───────────────────
+"$ADB" shell run-as "$PKG" rm -f files/certs/client.csr >/dev/null 2>&1 || true
+"$ADB" shell am start -n "$PKG/.MainActivity" --ez enrol true --es device "$DEVICE" >/dev/null
+for _ in $(seq 1 30); do
+  "$ADB" shell run-as "$PKG" test -f files/certs/client.csr && break
+  sleep 1
+done
+"$ADB" exec-out run-as "$PKG" cat files/certs/client.csr > "$TMP_LOCAL/client.csr" ||
+  die "the app wrote no request: is the debug build installed and the screen unlocked?"
+
+# ── 2. checked before anything is signed ─────────────────────────────────────
+openssl req -in "$TMP_LOCAL/client.csr" -noout -verify 2>&1 | grep -q "verify OK" ||
+  die "the request's signature does not verify"
+subject=$(openssl req -in "$TMP_LOCAL/client.csr" -noout -subject -nameopt RFC2253)
+[ "$subject" = "subject=CN=$DEVICE,O=psychron" ] || die "unexpected subject: $subject"
+openssl req -in "$TMP_LOCAL/client.csr" -noout -text | grep -q "NIST CURVE: P-256" ||
+  die "the request is not for a P-256 key"
+
+# ── 3. signed, and the public half pushed back ───────────────────────────────
+openssl x509 -req -in "$TMP_LOCAL/client.csr" -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
+  -out "certs/$DEVICE.device.crt" -days 730 -sha256 -extfile certs/ext.cnf -extensions client 2>/dev/null
+
+cp certs/ca.crt "$TMP_LOCAL/ca.crt"
+cp "certs/$DEVICE.device.crt" "$TMP_LOCAL/client.crt"
 printf 'hosts=%s\nport=8883\ndevice=%s\n' "$HOSTS" "$DEVICE" > "$TMP_LOCAL/node.properties"
 
 "$ADB" shell mkdir -p "$TMP_REMOTE"
-for f in ca.crt client.crt client.pk8 node.properties; do
+for f in ca.crt client.crt node.properties; do
   "$ADB" push "$TMP_LOCAL/$f" "$TMP_REMOTE/$f" >/dev/null
 done
 "$ADB" shell run-as "$PKG" sh -c "'mkdir -p files/certs && cp $TMP_REMOTE/* files/certs/ && chmod 600 files/certs/*'"
 
-echo "  provisioned $DEVICE -> ${HOSTS//,/ | } :8883"
+echo "  enrolled $DEVICE -> ${HOSTS//,/ | } :8883"
+openssl x509 -in "certs/$DEVICE.device.crt" -noout -subject -serial -enddate | sed 's/^/    /'
 "$ADB" shell run-as "$PKG" ls -l files/certs
+if [ -f "certs/$DEVICE.crt" ]; then
+  echo
+  echo "  Once the app shows 'identity · hardware key', revoke the file key it had before:"
+  echo "    ./make-certs.sh revoke $DEVICE && docker compose restart broker"
+fi

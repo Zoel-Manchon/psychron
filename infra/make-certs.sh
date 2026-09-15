@@ -25,6 +25,47 @@ CERTS=certs
 DAYS_CA=3650
 DAYS_LEAF=730
 
+# `openssl ca` keeps a database of what it has revoked. Only revocation uses it:
+# certificates are still issued with `openssl x509 -req`, and the database learns
+# of one only when it is revoked, which `openssl ca -revoke` accepts.
+ensure_ca_database() {
+  [ -f "$CERTS/index.txt" ] || : > "$CERTS/index.txt"
+  [ -f "$CERTS/crlnumber" ] || echo 1000 > "$CERTS/crlnumber"
+  cat > "$CERTS/ca.cnf" <<EOF
+[ca]
+default_ca = psychron
+
+[psychron]
+database         = $CERTS/index.txt
+crlnumber        = $CERTS/crlnumber
+certificate      = $CERTS/ca.crt
+private_key      = $CERTS/ca.key
+default_md       = sha256
+default_crl_days = $DAYS_CA
+EOF
+}
+
+# ./make-certs.sh revoke <name>
+#
+# Revokes certs/<name>.crt, regenerates the list and moves the certificate and its
+# key into certs.old-<date>/, which .gitignore already keeps out of the tree. Used
+# when a phone enrols a hardware key: the file key it had before existed on the host
+# and in the phone's storage, and must stop working, not merely stop being used.
+if [ "${1:-}" = "revoke" ]; then
+  name="${2:?usage: ./make-certs.sh revoke <name>}"
+  [ -f "$CERTS/$name.crt" ] || { echo "no $CERTS/$name.crt to revoke" >&2; exit 1; }
+  ensure_ca_database
+  openssl ca -config "$CERTS/ca.cnf" -revoke "$CERTS/$name.crt" 2>&1 | grep -v "^Using configuration" | sed 's/^/  /'
+  openssl ca -config "$CERTS/ca.cnf" -gencrl -out "$CERTS/crl.pem" 2>/dev/null
+  archive="certs.old-$(date +%Y%m%d)"
+  mkdir -p "$archive"
+  mv "$CERTS/$name.crt" "$archive/"
+  [ -f "$CERTS/$name.key" ] && mv "$CERTS/$name.key" "$archive/"
+  echo "  revoked $name, moved to $archive/. The broker reads the list at start:"
+  echo "    docker compose restart broker"
+  exit 0
+fi
+
 # The node connects to the broker by IP, so that IP has to appear in the server
 # certificate's subjectAltName. A certificate without it fails hostname
 # verification with an error that points at the certificate rather than at the
@@ -161,11 +202,15 @@ issue_client() {
 
 issue_client esp32-01
 issue_client ingest
-# The Android node. Its key is generated here and copied onto the phone, which is
-# exactly the weakness the ESP32 has too: a device key that has existed outside
-# the device. The next step replaces this with a key born inside StrongBox that
-# never leaves it, and a CSR signed here instead.
-issue_client phone-01
+# The Android node, until it enrols. A phone generates its own key in secure
+# hardware and provision-phone.sh signs its request into phone-01.device.crt; from
+# then on the host holds no key for it, and none is issued here again. Before that,
+# a host-issued key is what lets the simulator and a phone without enrolment work.
+if [ -f "$CERTS/phone-01.device.crt" ]; then
+  echo "  client 'phone-01' is enrolled with a hardware key, issuing nothing for it"
+else
+  issue_client phone-01
+fi
 
 # The firmware server gets a server certificate of its own rather than reusing
 # the broker's: two services on one key means a compromise of either is a
@@ -180,6 +225,13 @@ issue_server web psychron-web
 
 # Mosquitto refuses to start on a key it considers world readable.
 chmod 640 "$CERTS"/*.key 2>/dev/null || true
+
+# The revocation list, regenerated on every run so it always exists: the broker
+# refuses to start without the file it is configured to check, and a list that
+# expired would refuse every client at once — hence ten years, the CA's lifetime.
+ensure_ca_database
+openssl ca -config "$CERTS/ca.cnf" -gencrl -out "$CERTS/crl.pem" 2>/dev/null
+echo "  revocation list: $(openssl crl -in "$CERTS/crl.pem" -noout -text | grep -c 'Serial Number') revoked"
 
 echo
 echo "Certificates in infra/certs (gitignored). The private keys never leave it."
