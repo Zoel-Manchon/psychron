@@ -41,8 +41,18 @@ object NodeBus {
         val events: Int = 0,
         val lastEvent: Contract.Vibration? = null,
         val lastEventElapsed: Long = 0,
+        /** What the vibration detector is doing, as of the last window. */
+        val vibration: VibrationDetector.Status? = null,
         /** True while messages leave in 30-second batches on a metered network. */
         val batching: Boolean = false,
+        /** The latest position however old, with its age: the screen shows it, the contract may not. */
+        val fix: LocationTracker.Fix? = null,
+        /** Whether location is switched on for the whole phone, which no permission overrides. */
+        val locationEnabled: Boolean = true,
+        /** Wall-clock creation time of the oldest message still on disk; null when the outbox is empty. */
+        val oldestQueuedMs: Long? = null,
+        /** elapsedRealtime of the broker's latest acknowledgement; 0 before the first. */
+        val lastAckElapsed: Long = 0,
     )
 
     @Volatile var state = State()

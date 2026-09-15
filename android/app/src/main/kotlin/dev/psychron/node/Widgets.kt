@@ -196,4 +196,35 @@ class Tile(context: Context, label: String, private val unit: String, meter: Boo
         note.text = noteText
         meter?.fraction = fraction
     }
+
+    fun show(r: Readouts.Readout) = show(r.value, r.note, r.fraction)
+}
+
+/**
+ * A group of tiles under a name, with the instruments behind them set small to the
+ * right. Ten tiles in one unbroken grid read as a list; four named groups read as
+ * what the phone is measuring about the room, about itself and about where it is.
+ */
+fun Context.sectionHead(title: String, sources: String) = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    val row = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.BOTTOM
+    }
+    row.addView(TextView(context).apply {
+        text = title
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextColor(Ink.ink)
+        typeface = Ink.monoBold
+    }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    row.addView(TextView(context).apply {
+        text = sources
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+        setTextColor(Ink.ink3)
+        typeface = Ink.mono
+    })
+    addView(row)
+    addView(hairline().also { (it.layoutParams as LinearLayout.LayoutParams).apply { topMargin = dpi(5); bottomMargin = dpi(10) } })
+    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        .apply { topMargin = dpi(12) }
 }

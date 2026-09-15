@@ -98,7 +98,9 @@ class NodeService : Service() {
             it.copy(running = true, sensors = window.present.toMap() + ("location" to location.available),
                     microphone = sound.available, queued = box.count,
                     meteredBytes = 0, unmeteredBytes = 0, startedElapsed = SystemClock.elapsedRealtime(),
-                    identity = identityLabel(), events = 0, lastEvent = null)
+                    identity = identityLabel(), events = 0, lastEvent = null, vibration = null,
+                    fix = null, locationEnabled = location.enabled, oldestQueuedMs = box.oldestCreatedMs(),
+                    lastAckElapsed = 0)
         }
 
         nextDeadline = SystemClock.uptimeMillis() + WINDOW_MS
@@ -147,10 +149,18 @@ class NodeService : Service() {
         Contract.encode(envelope, summary)?.let { link?.offer("psychron/v2/${config.device}/sample", it) }
 
         net?.sampleTraffic()
+        val fixForScreen = location.last()
+        val locationOn = location.enabled
+        val detector = window.vibrationStatus()
+        // Guarded: this runs on the sensor thread, and a stop closes the outbox from
+        // the main one. A query that lands in between must not crash the node on its
+        // way out.
+        val oldest = runCatching { outbox?.oldestCreatedMs() }.getOrNull()
         NodeBus.update {
             it.copy(latest = summary, network = net?.label ?: it.network,
                     meteredBytes = net?.meteredBytes ?: 0, unmeteredBytes = net?.unmeteredBytes ?: 0,
-                    batching = link?.batching == true)
+                    batching = link?.batching == true, fix = fixForScreen, locationEnabled = locationOn,
+                    vibration = detector, oldestQueuedMs = oldest)
         }
     }
 
@@ -261,7 +271,7 @@ class NodeService : Service() {
 
     companion object {
         const val WINDOW_MS = 2000
-        const val FIRMWARE = "android-0.5.0"
+        const val FIRMWARE = "android-0.5.1"
         // The same pool family the ESP32 and the host use, so all three clocks of
         // the system are corrected against one standard.
         private val NTP_SERVERS = listOf("es.pool.ntp.org", "pool.ntp.org", "time.cloudflare.com")

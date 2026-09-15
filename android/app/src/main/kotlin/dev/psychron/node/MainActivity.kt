@@ -20,7 +20,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Locale
-import kotlin.math.log10
 
 /**
  * The node's own face: what it measures, whether it is connected, and exactly what
@@ -32,7 +31,6 @@ class MainActivity : Activity() {
 
     private lateinit var pip: View
     private lateinit var status: TextView
-    private lateinit var counters: TextView
     private lateinit var clockLine: TextView
     private lateinit var networkLine: TextView
     private lateinit var dataLine: TextView
@@ -40,7 +38,6 @@ class MainActivity : Activity() {
     private lateinit var alertLine: TextView
     private lateinit var provisioning: TextView
     private lateinit var toggle: TextView
-    private lateinit var windowInfo: TextView
 
     private lateinit var pressure: Tile
     private lateinit var light: Tile
@@ -91,10 +88,10 @@ class MainActivity : Activity() {
         status = mono(13f, Ink.ink)
         statusRow.addView(status)
         column.addView(statusRow)
-        counters = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(4), 0, 0) }
-        column.addView(counters)
-        for (line in listOf(::clockLine, ::networkLine, ::dataLine, ::keyLine)) {
-            val v = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
+        // What was sent, replayed and dropped lives in the outbox tile now, beside
+        // what is still waiting: the four counters mean something only together.
+        for ((i, line) in listOf(::clockLine, ::networkLine, ::dataLine, ::keyLine).withIndex()) {
+            val v = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(if (i == 0) 4 else 2), 0, 0) }
             line.set(v)
             column.addView(v)
         }
@@ -112,31 +109,29 @@ class MainActivity : Activity() {
         column.addView(toggle, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(48))
             .apply { topMargin = dpi(16); bottomMargin = dpi(22) })
 
-        // ── measurements ────────────────────────────────────────────────────
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
-        head.addView(label("Measured this window"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        windowInfo = mono(9.5f, Ink.ink3)
-        head.addView(windowInfo)
-        column.addView(head)
-        column.addView(hairline().also { (it.layoutParams as LinearLayout.LayoutParams).apply { topMargin = dpi(5); bottomMargin = dpi(10) } })
-
+        // ── measurements, in the same four groups as the web panel ──────────
         pressure = Tile(this, "Pressure", "hPa")
         light = Tile(this, "Light", "lx", meter = true)
         noise = Tile(this, "Noise · A-weighted", "dBFS", meter = true)
         motion = Tile(this, "Motion", "m/s²")
         compass = CompassView(this)
         heading = Tile(this, "Heading", "°", trailing = compass)
-        battery = Tile(this, "Battery", "°C")
+        vibration = Tile(this, "Vibration · seismic trigger", "m/s²", meter = true)
         place = Tile(this, "Altitude · GNSS", "m")
         cell = Tile(this, "Cell · serving", "dBm")
-        vibration = Tile(this, "Vibration", "m/s²")
+        battery = Tile(this, "Battery", "°C")
         queue = Tile(this, "Outbox · on disk", "")
 
+        column.addView(sectionHead("Environment", "barometer · light · microphone"))
         column.addView(pair(pressure, light))
-        column.addView(pair(noise, motion))
-        column.addView(pair(heading, battery))
+        column.addView(wide(noise))
+        column.addView(sectionHead("Motion", "accelerometer · gyroscope · compass"))
+        column.addView(pair(motion, heading))
+        column.addView(wide(vibration))
+        column.addView(sectionHead("Position & signal", "GNSS · modem"))
         column.addView(pair(place, cell))
-        column.addView(pair(vibration, queue))
+        column.addView(sectionHead("This phone", "battery · link"))
+        column.addView(pair(battery, queue))
 
         // ── the wire ────────────────────────────────────────────────────────
         column.addView(label("What leaves the phone · last message").also { it.setPadding(0, dpi(16), 0, 0) })
@@ -284,8 +279,6 @@ class MainActivity : Activity() {
             else -> "not provisioned"
         }
         status.setTextColor(if (s.running && !connected) Ink.accent else Ink.ink)
-        counters.text = "sent ${s.sent} · replayed ${s.replayed} · queued ${s.queued} · dropped ${s.dropped}" +
-            if (s.running && !s.microphone) " · microphone not granted" else ""
 
         clockLine.text = if (s.running) "time · ${s.clock}" else ""
         clockLine.setTextColor(if (s.clock.startsWith("NTP")) Ink.ink3 else Ink.accent)
@@ -309,59 +302,22 @@ class MainActivity : Activity() {
             setStroke(dpi(1), if (s.running) Ink.accent else Ink.ink2)
         }
 
-        val m = s.latest
-        windowInfo.text = if (s.running) "2 s window" else ""
-
         // Station pressure, and said so: a weather site quotes pressure reduced to
-        // sea level, and 956 hPa next to its 1015 looks like a broken sensor. Notes
-        // use non-breaking spaces inside quantities, so "100 000 lx" never splits
-        // across a line — the same failure the wrapped JSON had.
-        pressure.show(fmt(m?.pressureHpa, 1), "station, not sea level")
-
-        light.show(fmt(m?.illuminanceLux, 0), "log · 0.1–100 000 lx",
-                   m?.illuminanceLux?.let { ((log10(it.coerceAtLeast(0.1)) + 1) / 6).toFloat() })
-
-        noise.show(fmt(m?.laeqDbfs ?: m?.soundRmsDbfs, 1),
-                   when {
-                       m?.l90Dbfs != null -> "L10 ${fmt(m.l10Dbfs, 1)} · L90 ${fmt(m.l90Dbfs, 1)} · A"
-                       m?.laeqDbfs != null -> "LAeq · minute stats after 30 s"
-                       s.running && !s.microphone -> "microphone not granted"
-                       else -> "relative, not dB SPL"
-                   },
-                   (m?.laeqDbfs ?: m?.soundRmsDbfs)?.let { ((it + 90) / 90).toFloat() })
-
-        val moving = (m?.accelRms ?: 0.0) > 0.25 || (m?.gyroRms ?: 0.0) > 0.2
-        motion.show(fmt(m?.accelRms, 2),
-                    if (m?.gyroRms == null) "gravity removed"
-                    else "rot ${fmt(m.gyroRms, 3)} rad/s · ${if (moving) "moving" else "still"}")
-
-        val h = m?.headingDeg?.let(Contract::normaliseHeading)
-        compass.heading = h?.toFloat()
-        heading.show(fmt(h, 0), if (m?.magneticUt != null) "magnetic · ${fmt(m.magneticUt, 1)} µT" else "magnetic north")
-
-        battery.show(fmt(m?.batteryTempC, 1), "the phone, not the room")
-
-        place.show(fmt(m?.altMslM, 0),
-                   when {
-                       m?.lat == null && s.running && s.sensors["location"] == false -> "location not granted"
-                       m?.lat == null -> "no fix yet"
-                       else -> "±${fmt(m.locAccM, 0)} m" +
-                           (m.speedMs?.let { " · ${fmt(it * 3.6, 1)} km/h" } ?: "") + " · sea level"
-                   })
-
-        cell.show(fmt(m?.rsrpDbm, 0),
-                  if (m?.cellRat == null) "no serving cell"
-                  else "${if (m.cellRat == "nr") "5G NR" else "LTE"}${m.cellBand?.let { if (m.cellRat == "nr") " n$it" else " B$it" } ?: ""}" +
-                      (m.sinrDb?.let { " · SINR ${fmt(it, 0)}" } ?: "") + (m.rttMs?.let { " · ${fmt(it, 0)} ms" } ?: ""))
-
-        val last = s.lastEvent
-        vibration.show(fmt(last?.pgaMs2, 2),
-                       if (last == null) "none yet · lie the phone still"
-                       else "${s.events} event${if (s.events == 1) "" else "s"} · " +
-                           "${VibrationDetector.describe(last.pgaMs2)} · ${(SystemClock.elapsedRealtime() - s.lastEventElapsed) / 1000} s ago")
-
-        queue.show(s.queued.toString(),
-                   if (s.batching) "sent in batches on mobile data" else "sent as measured · survives restarts")
+        // sea level, and 956 hPa next to its 1015 looks like a broken sensor. What
+        // every tile says is decided in Readouts, where it is tested.
+        val m = s.latest
+        val now = SystemClock.elapsedRealtime()
+        pressure.show(Readouts.pressure(m))
+        light.show(Readouts.light(m))
+        noise.show(Readouts.noise(m, s.running, s.microphone))
+        motion.show(Readouts.motion(m))
+        compass.heading = Readouts.headingDegrees(m)?.toFloat()
+        heading.show(Readouts.heading(m))
+        vibration.show(Readouts.vibration(s, now))
+        place.show(Readouts.altitude(s))
+        cell.show(Readouts.cell(m))
+        battery.show(Readouts.battery(m))
+        queue.show(Readouts.outbox(s, System.currentTimeMillis(), now))
 
         val json = s.lastJson
         if (json == null) {
@@ -435,16 +391,18 @@ class MainActivity : Activity() {
             .apply { bottomMargin = dpi(10) }
     }
 
+    /** A tile across the whole width, for the two whose notes run to two lines. */
+    private fun wide(tile: View) = LinearLayout(this).apply {
+        addView(tile, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { bottomMargin = dpi(10) }
+    }
+
     private fun mono(size: Float, color: Int) = TextView(this).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
         setTextColor(color)
         typeface = Ink.mono
     }
-
-    // Locale.ROOT: a Spanish phone would otherwise write 955,95 on a screen whose
-    // every other number, and the JSON beneath it, uses a decimal point.
-    private fun fmt(v: Double?, decimals: Int): String? =
-        v?.let { String.format(Locale.ROOT, "%.${decimals}f", it) }
 
     companion object { private const val PERMISSIONS = 7 }
 }

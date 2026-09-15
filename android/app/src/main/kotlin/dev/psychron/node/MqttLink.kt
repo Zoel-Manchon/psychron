@@ -249,7 +249,8 @@ class MqttLink(
         val sample = m.topic.endsWith("/sample")
         NodeBus.update {
             it.copy(sent = it.sent + 1, replayed = it.replayed + if (replayed) 1 else 0,
-                    queued = outbox.count, lastJson = if (sample) json else it.lastJson)
+                    queued = outbox.count, lastJson = if (sample) json else it.lastJson,
+                    lastAckElapsed = SystemClock.elapsedRealtime())
         }
     }
 

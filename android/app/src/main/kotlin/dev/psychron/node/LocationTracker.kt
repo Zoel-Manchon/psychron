@@ -6,10 +6,13 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.location.altitude.AltitudeConverter
 import android.os.Build
+import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.Executor
 
 /**
  * The phone's position, from the platform's own location service.
@@ -20,14 +23,19 @@ import android.os.SystemClock
  * is under ten seconds old, because a position from a minute ago is where the phone
  * was, not where it is.
  *
+ * High accuracy, asked for explicitly. A request without a quality gets the fused
+ * provider's balanced mode, which on this phone meant network positions only: ±100 m,
+ * one every thirty seconds, and so a location in one window out of three.
+ *
  * Altitude is converted to mean sea level on the device. GNSS measures height over
  * the WGS84 ellipsoid, which over Spain sits about 50 m below the sea-level surface a
  * barometer's reduction assumes; Android 14 ships the geoid model to correct it.
  */
 class LocationTracker(private val context: Context, private val looper: Looper) : LocationListener {
 
+    /** A fix as the node reports it. [ageMs] is how old it was when this was made. */
     data class Fix(val lat: Double, val lon: Double, val accM: Double, val altMslM: Double?,
-                   val altAccM: Double?, val speedMs: Double?)
+                   val altAccM: Double?, val speedMs: Double?, val ageMs: Long)
 
     private val lm = context.getSystemService(LocationManager::class.java)
     @Volatile private var latest: Location? = null
@@ -37,14 +45,24 @@ class LocationTracker(private val context: Context, private val looper: Looper) 
         get() = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** Off in the quick settings, which no permission overrides: no provider reports anything. */
+    val enabled: Boolean
+        get() = runCatching { lm.isLocationEnabled }.getOrDefault(false)
+
     fun start() {
         if (!available) return
-        val providers = if (Build.VERSION.SDK_INT >= 31 && lm.hasProvider(LocationManager.FUSED_PROVIDER)) {
-            listOf(LocationManager.FUSED_PROVIDER)
-        } else {
-            listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter { lm.allProviders.contains(it) }
+        if (Build.VERSION.SDK_INT >= 31 && lm.hasProvider(LocationManager.FUSED_PROVIDER)) {
+            val request = LocationRequest.Builder(INTERVAL_MS)
+                .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                .build()
+            val handler = Handler(looper)
+            @Suppress("MissingPermission")
+            lm.requestLocationUpdates(LocationManager.FUSED_PROVIDER, request, Executor { handler.post(it) }, this)
+            return
         }
-        for (p in providers) {
+        // Before Android 12 there is no quality to ask for; GNSS is the accurate one,
+        // and the network provider covers indoors, where GNSS has no sky.
+        for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter { lm.allProviders.contains(it) }) {
             @Suppress("MissingPermission")
             lm.requestLocationUpdates(p, INTERVAL_MS, 0f, this, looper)
         }
@@ -67,9 +85,15 @@ class LocationTracker(private val context: Context, private val looper: Looper) 
     }
 
     /** The latest fix if it is recent enough to describe this window. */
-    fun current(): Fix? {
+    fun current(): Fix? = last()?.takeIf { it.ageMs <= MAX_AGE_MS }
+
+    /**
+     * The latest fix however old. For the screen, which says how old it is: a phone
+     * lying indoors can go a minute between fixes, and a blank in the meantime reads
+     * as a phone that has no idea where it is.
+     */
+    fun last(): Fix? {
         val l = latest ?: return null
-        if (ageNanos(l) > MAX_AGE_NANOS) return null
         val msl = Build.VERSION.SDK_INT >= 34 && l.hasMslAltitude()
         return Fix(
             lat = l.latitude,
@@ -78,6 +102,7 @@ class LocationTracker(private val context: Context, private val looper: Looper) 
             altMslM = if (msl) l.mslAltitudeMeters else null,
             altAccM = if (msl && l.hasMslAltitudeAccuracy()) l.mslAltitudeAccuracyMeters.toDouble() else null,
             speedMs = if (l.hasSpeed()) l.speed.toDouble() else null,
+            ageMs = ageNanos(l) / 1_000_000,
         )
     }
 
@@ -91,6 +116,6 @@ class LocationTracker(private val context: Context, private val looper: Looper) 
 
     private companion object {
         const val INTERVAL_MS = 2000L
-        const val MAX_AGE_NANOS = 10_000_000_000L
+        const val MAX_AGE_MS = 10_000L
     }
 }
