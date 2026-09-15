@@ -68,8 +68,11 @@ static void reclaimUnconfirmed() {
     const size_t n = unconfirmed.reclaim(millis(), [](const StoreRecord &r) {
       StoreRecord again = r;
       again.quality |= Q_REPLAYED;
-      if (!store::push(again)) lostReadings++;
+      if (!store::push(again, false)) lostReadings++;
     });
+    // One header commit for the whole batch. Lost to a power cut, the batch is
+    // readings the broker most likely has already.
+    store::flush();
     Serial.printf("LINK;session_ended;requeued=%u\n", (unsigned)n);
   }
   if (up) unconfirmedSession = netlink::session();
@@ -92,6 +95,8 @@ static void drainStore() {
     if (!publishRecord(r)) break;      // link went again; keep it for next time
     store::pop();
   }
+  // The tail committed once per pass rather than once per record.
+  store::flush();
 }
 
 static void handOff(StoreRecord &r) {

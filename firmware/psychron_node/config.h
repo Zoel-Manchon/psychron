@@ -11,7 +11,7 @@
   #error "secrets.h is missing: copy secrets.h.example to secrets.h and fill it in"
 #endif
 
-#define FW_VERSION        "1.2.2"
+#define FW_VERSION        "1.2.3"
 #define CONTRACT_VERSION  1
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
@@ -85,6 +85,8 @@
 // Only written while the link is down, so the flash sees no wear in normal
 // operation. 5000 records is a little under three hours at the read period.
 #define STORE_CAPACITY    5000
+// The single-file ring of versions before 1.2.3: read once at boot, its backlog
+// carried into the split layout, and removed. See store.cpp.
 #define STORE_PATH        "/queue.bin"
 
 // ── Sensor limits ────────────────────────────────────────────────────────────

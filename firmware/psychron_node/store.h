@@ -23,9 +23,14 @@ struct StoreRecord {
 namespace store {
 
 bool     begin();
-bool     push(const StoreRecord &r);
+// persist=false leaves the header for flush(): for a batch of pushes, when losing
+// the batch to a power cut costs less than a header commit per record.
+bool     push(const StoreRecord &r, bool persist = true);
 bool     peek(StoreRecord &r);        // false when empty or the head is corrupt
+// Moves the tail in memory only. A power cut before flush() replays the records
+// popped since, which ingestion discards as duplicates: a repeat, not a loss.
 void     pop();
+void     flush();
 uint32_t count();
 uint32_t dropped();                   // records evicted because the ring filled
 bool     healthy();                   // false if the filesystem never mounted
