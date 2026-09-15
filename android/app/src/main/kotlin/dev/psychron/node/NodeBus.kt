@@ -34,6 +34,15 @@ object NodeBus {
         val unmeteredBytes: Long = 0,
         /** elapsedRealtime at start, to turn byte counts into a rate. */
         val startedElapsed: Long = 0,
+        /** Which key signs the handshake, and where it lives. */
+        val identity: String = "",
+        /** Open alerts from the server, "kind/device" to the sentence it sent. */
+        val alerts: Map<String, String> = emptyMap(),
+        val events: Int = 0,
+        val lastEvent: Contract.Vibration? = null,
+        val lastEventElapsed: Long = 0,
+        /** True while messages leave in 30-second batches on a metered network. */
+        val batching: Boolean = false,
     )
 
     @Volatile var state = State()

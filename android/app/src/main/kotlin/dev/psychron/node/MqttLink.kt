@@ -3,35 +3,37 @@ package dev.psychron.node
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
-import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
+import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
 /**
- * Publishes windows over mutual TLS, and holds them while the network is gone.
+ * Publishes messages over mutual TLS from the on-disk outbox, and brings alerts back.
  *
- * Windows are queued as summaries, not as JSON, and serialised at the moment of
- * sending. That is what lets a window held through an outage be marked as replayed
- * truthfully: whether it was replayed is only known when it finally goes out.
+ * Every message is written to the [Outbox] before anything tries to send it, and
+ * removed only once the broker has acknowledged it at QoS 1: the process can die at
+ * any point in between and the message is still there on the next start.
+ *
+ * On a metered network messages leave in batches every 30 seconds instead of one
+ * every two. A modem that transmits every two seconds never gets to drop out of its
+ * connected state, and on LTE or NR that state costs hundreds of milliwatts; one
+ * burst every half minute lets it idle in between. The live panel then lags by up
+ * to half a minute, which is the trade the screen tells the user about.
  */
 class MqttLink(
     private val context: Context,
     private val config: NodeConfig,
     private val windowMs: Int,
     private val network: NetworkWatch,
+    private val outbox: Outbox,
+    private val onAlert: (topic: String, payload: String) -> Unit,
 ) {
-
-    private data class Pending(val envelope: Contract.Envelope, val summary: Contract.Summary, val createdAt: Long)
-
-    // One hour at one window every two seconds. A phone cannot buffer forever,
-    // and pretending it can would end in an out-of-memory kill that loses the whole
-    // backlog instead of its oldest part. Drops are counted and shown, never silent.
-    private val queue = LinkedBlockingDeque<Pending>(1800)
-
     @Volatile private var running = false
     private var worker: Thread? = null
     @Volatile private var client: MqttClient? = null
@@ -39,11 +41,14 @@ class MqttLink(
     /** The address that last connected, tried first until the network changes. */
     @Volatile private var lastWorked: String? = null
 
-    // Released when the network changes, to cut a reconnect backoff short: waiting
-    // out 10 s after walking into Wi-Fi range is waiting for nothing.
+    // Released when the network changes, to cut a reconnect backoff or a batch wait
+    // short: waiting out 10 s after walking into Wi-Fi range is waiting for nothing.
     private val wake = Semaphore(0)
 
-    private val topic = "psychron/v2/${config.device}/sample"
+    // Publish-to-acknowledgement times since the last window asked for them.
+    private val rttLock = Any()
+    private var rttSum = 0.0
+    private var rttCount = 0
 
     init {
         network.observe(::onNetworkChange)
@@ -64,15 +69,19 @@ class MqttLink(
         NodeBus.update { it.copy(link = "stopped") }
     }
 
-    fun offer(envelope: Contract.Envelope, summary: Contract.Summary) {
-        val p = Pending(envelope, summary, SystemClock.elapsedRealtime())
-        if (!queue.offerLast(p)) {
-            queue.pollFirst()
-            queue.offerLast(p)
-            NodeBus.update { it.copy(dropped = it.dropped + 1) }
-        }
-        NodeBus.update { it.copy(queued = queue.size) }
+    /** Written to disk now; sent when the link and the batching schedule allow. */
+    fun offer(topic: String, json: String) {
+        val evicted = outbox.add(topic, json, System.currentTimeMillis())
+        NodeBus.update { it.copy(queued = outbox.count, dropped = it.dropped + evicted) }
+        wake.release()
     }
+
+    /** Mean broker round trip since the last call, for the next window's `net.rtt`. */
+    fun drainRtt(): Double? = synchronized(rttLock) {
+        (if (rttCount == 0) null else rttSum / rttCount).also { rttSum = 0.0; rttCount = 0 }
+    }
+
+    val batching: Boolean get() = network.metered
 
     private fun onNetworkChange(change: NetworkWatch.Change) {
         lastWorked = null
@@ -100,14 +109,16 @@ class MqttLink(
             try {
                 val c = client?.takeIf { it.isConnected } ?: connect()
                 backoffMs = 1000L
-                val next = queue.pollFirst(1, TimeUnit.SECONDS) ?: continue
-                try {
-                    send(c, next)
-                } catch (e: Exception) {
-                    // Back at the head, not the tail: the order a backlog is replayed
-                    // in is the order it was measured in.
-                    queue.offerFirst(next)
-                    throw e
+
+                val waitMs = untilSendable()
+                if (waitMs > 0) {
+                    wake.tryAcquire(waitMs, TimeUnit.MILLISECONDS)
+                    continue
+                }
+                val batch = outbox.oldest(BATCH_LIMIT)
+                for (m in batch) {
+                    if (!running) return
+                    send(c, m)
                 }
             } catch (_: InterruptedException) {
                 return
@@ -127,12 +138,25 @@ class MqttLink(
                 } catch (_: InterruptedException) {
                     return
                 }
-                // Capped at 10 s rather than minutes. A queued window costs nothing to
+                // Capped at 10 s rather than minutes. A queued message costs nothing to
                 // hold, but every second of backoff is a second of latency on all of
                 // them once the broker is back, and a refused connect is cheap.
                 backoffMs = (backoffMs * 2).coerceAtMost(10_000L)
             }
         }
+    }
+
+    /**
+     * Milliseconds until the outbox should be sent, 0 for now. Nothing waiting: a
+     * second, to look again. Live on an unmetered network. Metered: once the oldest
+     * message is half a minute old, or the batch is full.
+     */
+    private fun untilSendable(): Long {
+        val oldest = outbox.oldestCreatedMs() ?: return 1000L
+        if (!network.metered) return 0L
+        if (outbox.count >= BATCH_LIMIT) return 0L
+        val age = System.currentTimeMillis() - oldest
+        return (BATCH_MS - age).coerceAtLeast(0L)
     }
 
     private fun connect(): MqttClient {
@@ -177,8 +201,19 @@ class MqttLink(
             isAutomaticReconnect = false
             mqttVersion = MqttConnectOptions.MQTT_VERSION_3_1_1
         }
+        c.setCallback(object : MqttCallback {
+            override fun connectionLost(cause: Throwable?) = Unit     // the worker notices on its next publish
+            override fun deliveryComplete(token: IMqttDeliveryToken?) = Unit
+            override fun messageArrived(topic: String, message: MqttMessage) {
+                runCatching { onAlert(topic, String(message.payload, Charsets.UTF_8)) }
+            }
+        })
         try {
             c.connect(options)
+            // A clean session remembers no subscriptions, so this is repeated on every
+            // connect. Retained alerts arrive straight away: the current state, not
+            // only the changes made while this connection happens to be open.
+            c.subscribe("psychron/alerts/#", 1)
         } catch (e: Exception) {
             runCatching { c.close() }
             throw e
@@ -191,20 +226,36 @@ class MqttLink(
         endpoint = host
         lastWorked = host
         NodeBus.update { it.copy(link = "connected · mTLS", endpoint = host) }
+        Provisioning.retireLegacyKey(context)
         return c
     }
 
-    private fun send(c: MqttClient, p: Pending) {
-        val waited = SystemClock.elapsedRealtime() - p.createdAt
-        val replayed = waited > 2L * windowMs + 1000L
-        val quality = if (replayed) p.envelope.quality or Contract.Q_REPLAYED else p.envelope.quality
-        val json = Contract.encode(p.envelope.copy(quality = quality), p.summary) ?: return
+    private fun send(c: MqttClient, m: Outbox.Message) {
+        val waited = System.currentTimeMillis() - m.createdMs
+        // Replayed means it waited longer than the schedule it was sent on explains:
+        // an outage, not a batch.
+        val schedule = if (network.metered) BATCH_MS else 0L
+        val replayed = waited > schedule + 2L * windowMs + 1000L
+        val json = if (replayed) Contract.markReplayed(m.json) else m.json
+
+        val started = SystemClock.elapsedRealtime()
         // QoS 1 on a blocking client: this returns only once the broker has
-        // acknowledged the message, so nothing is counted as sent that was not.
-        c.publish(topic, json.toByteArray(Charsets.UTF_8), 1, false)
-        NodeBus.update { it.copy(sent = it.sent + 1, replayed = it.replayed + if (replayed) 1 else 0,
-                                 queued = queue.size, lastJson = json) }
+        // acknowledged the message, so nothing is removed that was not delivered.
+        c.publish(m.topic, json.toByteArray(Charsets.UTF_8), 1, false)
+        val rtt = SystemClock.elapsedRealtime() - started
+        outbox.remove(m.id)
+        synchronized(rttLock) { rttSum += rtt; rttCount++ }
+
+        val sample = m.topic.endsWith("/sample")
+        NodeBus.update {
+            it.copy(sent = it.sent + 1, replayed = it.replayed + if (replayed) 1 else 0,
+                    queued = outbox.count, lastJson = if (sample) json else it.lastJson)
+        }
     }
 
-    companion object { private const val TAG = "psychron-link" }
+    companion object {
+        private const val TAG = "psychron-link"
+        const val BATCH_MS = 30_000L
+        private const val BATCH_LIMIT = 200
+    }
 }

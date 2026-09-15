@@ -36,16 +36,22 @@ class MainActivity : Activity() {
     private lateinit var clockLine: TextView
     private lateinit var networkLine: TextView
     private lateinit var dataLine: TextView
+    private lateinit var keyLine: TextView
+    private lateinit var alertLine: TextView
     private lateinit var provisioning: TextView
     private lateinit var toggle: TextView
     private lateinit var windowInfo: TextView
 
     private lateinit var pressure: Tile
     private lateinit var light: Tile
-    private lateinit var sound: Tile
+    private lateinit var noise: Tile
     private lateinit var motion: Tile
     private lateinit var heading: Tile
     private lateinit var battery: Tile
+    private lateinit var place: Tile
+    private lateinit var cell: Tile
+    private lateinit var vibration: Tile
+    private lateinit var queue: Tile
     private lateinit var compass: CompassView
 
     private lateinit var wireMeta: TextView
@@ -76,6 +82,8 @@ class MainActivity : Activity() {
 
         provisioning = mono(11f, Ink.accent)
         column.addView(provisioning)
+        alertLine = mono(11.5f, Ink.accent).apply { setPadding(0, 0, 0, dpi(8)) }
+        column.addView(alertLine)
 
         val statusRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         pip = View(this)
@@ -85,12 +93,11 @@ class MainActivity : Activity() {
         column.addView(statusRow)
         counters = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(4), 0, 0) }
         column.addView(counters)
-        clockLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
-        column.addView(clockLine)
-        networkLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
-        column.addView(networkLine)
-        dataLine = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
-        column.addView(dataLine)
+        for (line in listOf(::clockLine, ::networkLine, ::dataLine, ::keyLine)) {
+            val v = mono(10.5f, Ink.ink3).apply { setPadding(0, dpi(2), 0, 0) }
+            line.set(v)
+            column.addView(v)
+        }
 
         // A bordered control rather than a filled slab: the action matters, but
         // it is not the most important thing on a screen full of measurements.
@@ -115,15 +122,21 @@ class MainActivity : Activity() {
 
         pressure = Tile(this, "Pressure", "hPa")
         light = Tile(this, "Light", "lx", meter = true)
-        sound = Tile(this, "Sound", "dBFS", meter = true)
+        noise = Tile(this, "Noise · A-weighted", "dBFS", meter = true)
         motion = Tile(this, "Motion", "m/s²")
         compass = CompassView(this)
         heading = Tile(this, "Heading", "°", trailing = compass)
         battery = Tile(this, "Battery", "°C")
+        place = Tile(this, "Altitude · GNSS", "m")
+        cell = Tile(this, "Cell · serving", "dBm")
+        vibration = Tile(this, "Vibration", "m/s²")
+        queue = Tile(this, "Outbox · on disk", "")
 
         column.addView(pair(pressure, light))
-        column.addView(pair(sound, motion))
+        column.addView(pair(noise, motion))
         column.addView(pair(heading, battery))
+        column.addView(pair(place, cell))
+        column.addView(pair(vibration, queue))
 
         // ── the wire ────────────────────────────────────────────────────────
         column.addView(label("What leaves the phone · last message").also { it.setPadding(0, dpi(16), 0, 0) })
@@ -145,7 +158,8 @@ class MainActivity : Activity() {
         column.addView(well)
 
         column.addView(mono(9.5f, Ink.ink3).apply {
-            text = "Window summaries only. Audio is reduced to two numbers in memory and never stored or sent."
+            text = "Window summaries only. Audio is reduced to a few levels in memory and never stored or sent. " +
+                "Coordinates go to your own server only."
             setPadding(0, dpi(10), 0, 0)
         })
 
@@ -168,6 +182,33 @@ class MainActivity : Activity() {
         root.clipToPadding = true
         column.setPadding(dpi(18), dpi(18), dpi(18), dpi(22))
         setContentView(root)
+
+        handleEnrolment(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleEnrolment(intent)
+    }
+
+    /**
+     * infra/provision-phone.sh starts this screen with `enrol` set. The key is
+     * generated off the main thread — StrongBox takes a noticeable moment — and the
+     * signing request written where the script collects it.
+     */
+    private fun handleEnrolment(intent: Intent?) {
+        if (intent?.getBooleanExtra("enrol", false) != true) return
+        val device = intent.getStringExtra("device") ?: "phone-01"
+        Thread({
+            val result = runCatching { Provisioning.enrol(this, device) }
+            runOnUiThread {
+                provisioning.visibility = View.VISIBLE
+                provisioning.text = result.fold(
+                    { "Enrolment · key generated in ${it.name} · request ready for provision-phone.sh\n" },
+                    { "Enrolment failed · ${it.javaClass.simpleName}: ${it.message}\n" },
+                )
+            }
+        }, "psychron-enrol").start()
     }
 
     override fun onStart() {
@@ -187,8 +228,13 @@ class MainActivity : Activity() {
         }
         if (Provisioning.missing(this).isNotEmpty()) return
 
+        // Asked together, once. Each is optional: a refused microphone costs the sound
+        // and noise groups, a refused location the position and the band, and the
+        // node runs on what it was given.
         val wanted = buildList {
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 
@@ -197,9 +243,8 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        // Started whatever was answered. A refused microphone costs the sound group,
-        // not the node: the other sensors do not need it, and the contract says an
-        // absent group means no sample rather than a failure.
+        // Started whatever was answered. The contract says an absent group means no
+        // sample rather than a failure, so a refused permission is a smaller message.
         if (requestCode == PERMISSIONS) startNode()
     }
 
@@ -213,8 +258,18 @@ class MainActivity : Activity() {
         val missing = Provisioning.missing(this)
         val cfg = if (missing.isEmpty()) runCatching { Provisioning.config(this) }.getOrNull() else null
 
-        provisioning.visibility = if (missing.isEmpty()) View.GONE else View.VISIBLE
-        provisioning.text = "Not provisioned · missing ${missing.joinToString()}\nRun infra/provision-phone.sh with the phone connected.\n"
+        // An enrolment notice stands until a certificate for the new key is in place;
+        // after that it describes a step that is over, above a node that is running.
+        // A failure stands until enrolment is tried again.
+        val notice = provisioning.text
+        val enrolling = notice.startsWith("Enrolment failed") ||
+            (notice.startsWith("Enrolment") && Provisioning.identity(this) != Provisioning.Identity.HARDWARE)
+        if (!enrolling) {
+            provisioning.visibility = if (missing.isEmpty()) View.GONE else View.VISIBLE
+            provisioning.text = "Not provisioned · missing ${missing.joinToString()}\nRun infra/provision-phone.sh with the phone connected.\n"
+        }
+        alertLine.visibility = if (s.alerts.isEmpty()) View.GONE else View.VISIBLE
+        alertLine.text = s.alerts.values.joinToString("\n") { "▲ $it" }
 
         val connected = s.running && s.link.startsWith("connected")
         // A square pip, filled when live: the panel's own status mark, so the phone
@@ -235,9 +290,12 @@ class MainActivity : Activity() {
         clockLine.text = if (s.running) "time · ${s.clock}" else ""
         clockLine.setTextColor(if (s.clock.startsWith("NTP")) Ink.ink3 else Ink.accent)
 
-        networkLine.text = if (s.running) "network · ${s.network}${s.endpoint?.let { " → $it" } ?: ""}" else ""
+        networkLine.text = if (s.running) "network · ${s.network}${s.endpoint?.let { " → $it" } ?: ""}" +
+            (if (s.batching) " · batching every 30 s" else "") else ""
         networkLine.setTextColor(if (s.network == "no network") Ink.accent else Ink.ink3)
         dataLine.text = if (s.running) dataUsage(s) else ""
+        keyLine.text = if (s.running) "identity · ${s.identity}" else ""
+        keyLine.setTextColor(if (s.identity.startsWith("hardware key ·")) Ink.ink3 else Ink.accent)
 
         toggle.text = when {
             missing.isNotEmpty() -> "PROVISION FIRST"
@@ -260,27 +318,50 @@ class MainActivity : Activity() {
         // across a line — the same failure the wrapped JSON had.
         pressure.show(fmt(m?.pressureHpa, 1), "station, not sea level")
 
-        light.show(fmt(m?.illuminanceLux, 0), "log · 0.1–100 000 lx",
+        light.show(fmt(m?.illuminanceLux, 0), "log · 0.1–100 000 lx",
                    m?.illuminanceLux?.let { ((log10(it.coerceAtLeast(0.1)) + 1) / 6).toFloat() })
 
-        sound.show(fmt(m?.soundRmsDbfs, 1),
+        noise.show(fmt(m?.laeqDbfs ?: m?.soundRmsDbfs, 1),
                    when {
-                       m?.soundPeakDbfs != null -> "peak ${fmt(m.soundPeakDbfs, 1)} · not dB SPL"
+                       m?.l90Dbfs != null -> "L10 ${fmt(m.l10Dbfs, 1)} · L90 ${fmt(m.l90Dbfs, 1)} · A"
+                       m?.laeqDbfs != null -> "LAeq · minute stats after 30 s"
                        s.running && !s.microphone -> "microphone not granted"
-                       else -> "relative, not dB SPL"
+                       else -> "relative, not dB SPL"
                    },
-                   m?.soundRmsDbfs?.let { ((it + 90) / 90).toFloat() })
+                   (m?.laeqDbfs ?: m?.soundRmsDbfs)?.let { ((it + 90) / 90).toFloat() })
 
         val moving = (m?.accelRms ?: 0.0) > 0.25 || (m?.gyroRms ?: 0.0) > 0.2
         motion.show(fmt(m?.accelRms, 2),
                     if (m?.gyroRms == null) "gravity removed"
-                    else "rot ${fmt(m.gyroRms, 3)} rad/s · ${if (moving) "moving" else "still"}")
+                    else "rot ${fmt(m.gyroRms, 3)} rad/s · ${if (moving) "moving" else "still"}")
 
         val h = m?.headingDeg?.let(Contract::normaliseHeading)
         compass.heading = h?.toFloat()
-        heading.show(fmt(h, 0), if (m?.magneticUt != null) "magnetic · ${fmt(m.magneticUt, 1)} µT" else "magnetic north")
+        heading.show(fmt(h, 0), if (m?.magneticUt != null) "magnetic · ${fmt(m.magneticUt, 1)} µT" else "magnetic north")
 
         battery.show(fmt(m?.batteryTempC, 1), "the phone, not the room")
+
+        place.show(fmt(m?.altMslM, 0),
+                   when {
+                       m?.lat == null && s.running && s.sensors["location"] == false -> "location not granted"
+                       m?.lat == null -> "no fix yet"
+                       else -> "±${fmt(m.locAccM, 0)} m" +
+                           (m.speedMs?.let { " · ${fmt(it * 3.6, 1)} km/h" } ?: "") + " · sea level"
+                   })
+
+        cell.show(fmt(m?.rsrpDbm, 0),
+                  if (m?.cellRat == null) "no serving cell"
+                  else "${if (m.cellRat == "nr") "5G NR" else "LTE"}${m.cellBand?.let { if (m.cellRat == "nr") " n$it" else " B$it" } ?: ""}" +
+                      (m.sinrDb?.let { " · SINR ${fmt(it, 0)}" } ?: "") + (m.rttMs?.let { " · ${fmt(it, 0)} ms" } ?: ""))
+
+        val last = s.lastEvent
+        vibration.show(fmt(last?.pgaMs2, 2),
+                       if (last == null) "none yet · lie the phone still"
+                       else "${s.events} event${if (s.events == 1) "" else "s"} · " +
+                           "${VibrationDetector.describe(last.pgaMs2)} · ${(SystemClock.elapsedRealtime() - s.lastEventElapsed) / 1000} s ago")
+
+        queue.show(s.queued.toString(),
+                   if (s.batching) "sent in batches on mobile data" else "sent as measured · survives restarts")
 
         val json = s.lastJson
         if (json == null) {
@@ -296,8 +377,8 @@ class MainActivity : Activity() {
 
     /**
      * Colour by role, in the panel's palette: keys recede, values carry the ink, the
-     * one string worth noticing — which device this is — takes the cyan, and null
-     * takes the accent, because an unknown clock is the value most worth seeing.
+     * strings worth noticing take the cyan, and null takes the accent, because an
+     * unknown clock is the value most worth seeing.
      */
     private fun highlight(json: String): CharSequence {
         val out = SpannableStringBuilder()
@@ -327,16 +408,16 @@ class MainActivity : Activity() {
         val seconds = (SystemClock.elapsedRealtime() - s.startedElapsed) / 1000.0
         if (seconds >= 60) {
             val perDay = (s.meteredBytes + s.unmeteredBytes) / seconds * 86_400
-            parts += "≈ ${bytes(perDay.toLong())}/day"
+            parts += "≈ ${bytes(perDay.toLong())}/day"
         }
         return "data · " + parts.joinToString(" · ")
     }
 
     private fun bytes(n: Long): String = when {
-        n < 1_000 -> "$n B"
-        n < 1_000_000 -> String.format(Locale.ROOT, "%.0f kB", n / 1e3)
-        n < 10_000_000 -> String.format(Locale.ROOT, "%.1f MB", n / 1e6)
-        else -> String.format(Locale.ROOT, "%.0f MB", n / 1e6)
+        n < 1_000 -> "$n B"
+        n < 1_000_000 -> String.format(Locale.ROOT, "%.0f kB", n / 1e3)
+        n < 10_000_000 -> String.format(Locale.ROOT, "%.1f MB", n / 1e6)
+        else -> String.format(Locale.ROOT, "%.0f MB", n / 1e6)
     }
 
     // ── small builders ──────────────────────────────────────────────────────

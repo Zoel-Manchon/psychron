@@ -13,18 +13,24 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Sound level in dBFS, and nothing that could be played back.
+ * Sound level, and nothing that could be played back.
  *
- * PCM is read into one reusable buffer, folded into a running sum of squares and a
- * peak, and overwritten by the next read. Nothing is stored and no sample survives
- * the window it was measured in. The contract has no field that could carry audio;
- * this class has no code path that could produce one.
+ * PCM is read into one reusable buffer and reduced as it arrives: a running sum of
+ * squares and a peak for the unweighted level, and an A-weighting filter feeding
+ * 125 ms blocks for the noise figures. The buffer is overwritten by the next read.
+ * Nothing is stored and no sample survives the window it was measured in. The
+ * contract has no field that could carry audio; this class has no code path that
+ * could produce one.
  */
 class SoundMeter(private val context: Context) {
+
+    data class Levels(val rmsDbfs: Double, val peakDbfs: Double, val noise: NoiseLevels.Window?)
+
     private val lock = Any()
     private var sumSquares = 0.0
     private var count = 0L
     private var peak = 0
+    private var noise: NoiseLevels? = null
 
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -45,26 +51,27 @@ class SoundMeter(private val context: Context) {
         thread = null
     }
 
-    /** RMS and peak for everything read since the last call, then reset. */
-    fun drain(): Pair<Double, Double>? = synchronized(lock) {
+    /** Levels for everything read since the last call, then reset. */
+    fun drain(): Levels? = synchronized(lock) {
         if (count == 0L) return null
         val rms = sqrt(sumSquares / count)
-        val result = dbfs(rms) to dbfs(peak.toDouble())
+        val result = Levels(dbfs(rms), dbfs(peak.toDouble()), noise?.drain())
         sumSquares = 0.0; count = 0; peak = 0
         result
     }
 
     private fun loop() {
-        val rate = 16000
-        val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val recorder = try {
-            @Suppress("MissingPermission")
-            AudioRecord(source(), rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min, 4096))
-        } catch (e: Exception) {
+        // 48 kHz where the phone offers it, which every current one does. The
+        // A-weighting curve reaches 12 kHz and a 16 kHz stream would fold everything
+        // above 8 kHz back into the band being measured.
+        val (rate, recorder) = RATES.firstNotNullOfOrNull { r -> open(r)?.let { r to it } } ?: run {
             running = false
             return
         }
-        val buffer = ShortArray(1024)
+        val weighting = AWeighting(rate.toDouble())
+        synchronized(lock) { noise = NoiseLevels(rate) }
+
+        val buffer = ShortArray(2048)
         try {
             recorder.startRecording()
             while (running) {
@@ -72,13 +79,15 @@ class SoundMeter(private val context: Context) {
                 if (n <= 0) continue
                 var sq = 0.0
                 var pk = 0
-                for (i in 0 until n) {
-                    val s = buffer[i].toInt()
-                    sq += (s * s).toDouble()
-                    val a = abs(s)
-                    if (a > pk) pk = a
-                }
                 synchronized(lock) {
+                    val levels = noise!!
+                    for (i in 0 until n) {
+                        val s = buffer[i].toInt()
+                        sq += (s * s).toDouble()
+                        val a = abs(s)
+                        if (a > pk) pk = a
+                        levels.add(weighting.step(s.toDouble()))
+                    }
                     sumSquares += sq
                     count += n
                     if (pk > peak) peak = pk
@@ -87,6 +96,18 @@ class SoundMeter(private val context: Context) {
         } finally {
             recorder.stop()
             recorder.release()
+        }
+    }
+
+    private fun open(rate: Int): AudioRecord? {
+        val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (min <= 0) return null
+        return try {
+            @Suppress("MissingPermission")
+            AudioRecord(source(), rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min, 8192))
+                .takeIf { it.state == AudioRecord.STATE_INITIALIZED }
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -104,6 +125,8 @@ class SoundMeter(private val context: Context) {
     }
 
     companion object {
+        private val RATES = listOf(48000, 44100, 16000)
+
         /**
          * Relative to a full-scale 16-bit sample. Digital silence has no logarithm,
          * so it is reported at the contract's floor rather than as minus infinity,

@@ -9,8 +9,17 @@
          phone that could be turned back into sound. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Position for the track, the altitude that reduces pressure to sea level, and
+         the serving cell's band, which the platform only reveals with location. Fine
+         and coarse together: Android 12 lets the user pick either in one dialog. No
+         background location: a foreground service with a visible notification is
+         the only thing that ever reads it. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -23,6 +32,8 @@
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!-- allowBackup off and every extraction rule excluding everything: the app's
          private storage holds a TLS client key, and neither adb backup nor a cloud
@@ -49,6 +60,6 @@
         <service
             android:name=".NodeService"
             android:exported="false"
-            android:foregroundServiceType="microphone|dataSync" />
+            android:foregroundServiceType="microphone|location|dataSync" />
     </application>
 </manifest>

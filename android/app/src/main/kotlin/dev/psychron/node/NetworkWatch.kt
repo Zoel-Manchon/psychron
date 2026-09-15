@@ -40,6 +40,11 @@ class NetworkWatch(context: Context) {
         private set
     @Volatile var metered: Boolean = false
         private set
+    /** The contract's `net.via` and `net.vpn`; null while there is no network. */
+    @Volatile var via: String? = null
+        private set
+    @Volatile var vpn: Boolean = false
+        private set
 
     private var defaultNetwork: Network? = null
     private val local = mutableSetOf<Network>()
@@ -70,12 +75,22 @@ class NetworkWatch(context: Context) {
             if (network != defaultNetwork) return
             metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             label = describe(caps)
+            vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            via = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                vpn -> if (onLocalNetwork) "wifi" else "cell"
+                else -> "other"
+            }
         }
 
         override fun onLost(network: Network) {
             if (network != defaultNetwork) return
             defaultNetwork = null
             label = "no network"
+            via = null
+            vpn = false
             emit(Change.SWITCHED)
         }
     }

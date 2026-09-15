@@ -12,13 +12,18 @@ import android.os.Handler
 import kotlin.math.sqrt
 
 /**
- * Accumulates every sensor over one window and reduces it to a summary.
+ * Accumulates every sensor over one window and reduces it to a summary, and runs
+ * the vibration detector over the raw accelerometer between windows.
  *
  * All callbacks arrive on the handler passed in, and `take()` is called on the same
  * one, so the accumulators need no locking: one thread writes them and the same
  * thread reads and resets them.
  */
-class SensorWindow(private val context: Context, private val handler: Handler) : SensorEventListener {
+class SensorWindow(
+    private val context: Context,
+    private val handler: Handler,
+    private val onVibration: (VibrationDetector.Event) -> Unit,
+) : SensorEventListener {
 
     private class Stats {
         var n = 0
@@ -51,6 +56,8 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
     private val orientation = FloatArray(3)
     private var heading: Double? = null
 
+    private val detector = VibrationDetector()
+
     /** Which sensors this phone actually has, for the screen and the log. */
     val present = mutableMapOf<String, Boolean>()
 
@@ -67,6 +74,11 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
         // magnetometer with the gyroscope and so does not swing every time the
         // phone is tilted. Its azimuth is referenced to magnetic north.
         register("compass", Sensor.TYPE_ROTATION_VECTOR, SensorManager.SENSOR_DELAY_UI)
+        // The detector wants the raw accelerometer, gravity and all, at 200 Hz: the
+        // fused linear acceleration is filtered for gestures and smooths away the
+        // few-tenths-of-a-second shaking an event is made of. 200 Hz is the ceiling
+        // an app gets without asking for high-rate sensors, and enough to 100 Hz.
+        register("vibration", Sensor.TYPE_ACCELEROMETER, 5_000)
     }
 
     fun stop() = sm.unregisterListener(this)
@@ -85,25 +97,29 @@ class SensorWindow(private val context: Context, private val handler: Handler) :
             Sensor.TYPE_PRESSURE -> pressure.add(e.values[0].toDouble())
             Sensor.TYPE_LIGHT -> e.values[0].toDouble().let { light.add(it); lastLux = it }
             Sensor.TYPE_LINEAR_ACCELERATION -> accel.add(norm(e.values))
-            Sensor.TYPE_GYROSCOPE -> gyro.add(norm(e.values))
+            Sensor.TYPE_GYROSCOPE -> norm(e.values).let { gyro.add(it); detector.onRotation(e.timestamp, it) }
             Sensor.TYPE_MAGNETIC_FIELD -> mag.add(norm(e.values))
             Sensor.TYPE_ROTATION_VECTOR -> {
                 SensorManager.getRotationMatrixFromVector(rotation, e.values)
                 SensorManager.getOrientation(rotation, orientation)
                 heading = Math.toDegrees(orientation[0].toDouble())
             }
+            Sensor.TYPE_ACCELEROMETER -> detector.onAcceleration(
+                e.timestamp, e.values[0].toDouble(), e.values[1].toDouble(), e.values[2].toDouble(),
+            )?.let(onVibration)
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
 
+    /** Whether the detector is inside an event right now, for the screen. */
+    val shaking: Boolean get() = detector.triggered
+
     /** The summary of everything since the previous call, and a fresh window. */
-    fun take(sound: Pair<Double, Double>?): Contract.Summary {
+    fun take(): Contract.Summary {
         val s = Contract.Summary(
             pressureHpa = pressure.mean(),
             illuminanceLux = light.mean() ?: lastLux?.takeIf { luxOnChange },
-            soundRmsDbfs = sound?.first,
-            soundPeakDbfs = sound?.second,
             accelRms = accel.rms(),
             accelPeak = accel.peakOrNull(),
             gyroRms = gyro.rms(),
