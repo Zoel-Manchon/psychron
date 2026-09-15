@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Handler
+import android.util.Log
 import kotlin.math.sqrt
 
 /**
@@ -78,18 +79,31 @@ class SensorWindow(
         // fused linear acceleration is filtered for gestures and smooths away the
         // few-tenths-of-a-second shaking an event is made of. 200 Hz is the ceiling
         // an app gets without asking for high-rate sensors, and enough to 100 Hz.
-        register("vibration", Sensor.TYPE_ACCELEROMETER, 5_000)
+        //
+        // Slower rates behind it, because a refused rate is silent: registerListener
+        // returns false and logs a line nobody reads. The Galaxy S26 refuses anything
+        // faster than 100 Hz from this app, and until this checked the answer its
+        // detector never received a single sample while the screen said it was
+        // listening. Never below 5 000 µs: without HIGH_SAMPLING_RATE_SENSORS that is
+        // a SecurityException rather than a refusal, and the node would not start.
+        register("vibration", Sensor.TYPE_ACCELEROMETER, 5_000, 10_000, 20_000)
     }
 
     fun stop() = sm.unregisterListener(this)
 
-    private fun register(name: String, type: Int, delay: Int) {
+    /** Registers at the first of [delays] the phone accepts; [present] records whether any was. */
+    private fun register(name: String, type: Int, vararg delays: Int) {
         val sensor = sm.getDefaultSensor(type)
-        present[name] = sensor != null
-        if (sensor != null) {
-            if (type == Sensor.TYPE_LIGHT) luxOnChange = sensor.reportingMode == Sensor.REPORTING_MODE_ON_CHANGE
-            sm.registerListener(this, sensor, delay, handler)
+        if (sensor != null && type == Sensor.TYPE_LIGHT) luxOnChange = sensor.reportingMode == Sensor.REPORTING_MODE_ON_CHANGE
+        // A sensor the phone will not give is a smaller record, never a node that
+        // fails to start: an exception here is logged like a refusal.
+        val accepted = sensor != null && delays.any { delay ->
+            runCatching { sm.registerListener(this, sensor, delay, handler) }
+                .onFailure { Log.w(TAG, "$name at $delay µs: ${it.message}") }
+                .getOrDefault(false)
         }
+        present[name] = accepted
+        if (sensor != null && !accepted) Log.w(TAG, "$name: ${sensor.name} refused every rate in ${delays.toList()}")
     }
 
     override fun onSensorChanged(e: SensorEvent) {
@@ -112,8 +126,8 @@ class SensorWindow(
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
 
-    /** Whether the detector is inside an event right now, for the screen. */
-    val shaking: Boolean get() = detector.triggered
+    /** What the vibration detector is doing right now, for the screen. */
+    fun vibrationStatus(): VibrationDetector.Status = detector.status()
 
     /** The summary of everything since the previous call, and a fresh window. */
     fun take(): Contract.Summary {
@@ -147,4 +161,8 @@ class SensorWindow(
 
     private fun norm(v: FloatArray): Double =
         sqrt((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).toDouble())
+
+    private companion object {
+        const val TAG = "psychron-sensors"
+    }
 }

@@ -31,18 +31,45 @@ class VibrationDetector(
     private val stillRadPerS: Double = 0.05,
     private val stillSeconds: Double = 3.0,
     private val maxSeconds: Double = 60.0,
+    /**
+     * Strong shaking shorter than this is a glitch, not an event: 30 ms, six samples at
+     * 200 Hz and three at the 100 Hz the S26 grants. A knock on the table rings for most
+     * of a tenth of a second, and the 100 ms this used to be threw away every knock.
+     */
+    private val minimumSeconds: Double = 0.03,
+    /** Seconds of the phone lying still before anything can fire: the background has to be measured first. */
+    private val warmupSeconds: Double = 10.0,
 ) {
     /** A finished event. `startNanos` is on the clock the samples were stamped with. */
     data class Event(val startNanos: Long, val durationMs: Int, val pgaMs2: Double,
                      val staLta: Double, val freqHz: Double?)
 
+    enum class Readiness {
+        /** The background is still being measured: the first seconds lying still. */
+        WARMING_UP,
+        /** Paused: the gyroscope says the phone was handled in the last few seconds. */
+        MOVING,
+        LISTENING,
+        /** Inside an event. */
+        SHAKING,
+    }
+
+    /**
+     * What the detector is doing, for the screen. Without it a detector that has
+     * heard nothing and a detector that cannot hear anything look the same.
+     */
+    data class Status(val readiness: Readiness, val shortRms: Double, val backgroundRms: Double,
+                      val ratio: Double, val triggerRatio: Double)
+
     private val gravity = DoubleArray(3)
     private var lastNanos = 0L
-    private var warmNanos = 0L
     private var sta = 0.0
     private var lta = 0.0
+    /** Seconds the background has been learnt over: time lying still, outside events. */
+    private var stillElapsed = 0.0
 
     private var movedNanos = Long.MIN_VALUE / 2
+    private var wasStill = false
 
     // State of an event in progress.
     private var active = false
@@ -71,7 +98,6 @@ class VibrationDetector(
         if (lastNanos == 0L) {
             gravity[0] = x; gravity[1] = y; gravity[2] = z
             lastNanos = nanos
-            warmNanos = nanos
             return null
         }
         val dt = (nanos - lastNanos) / 1e9
@@ -89,13 +115,27 @@ class VibrationDetector(
         val energy = hp[0] * hp[0] + hp[1] * hp[1] + hp[2] * hp[2]
         val magnitude = sqrt(energy)
 
-        // Recursive averages. The long one is frozen during an event, or the event
-        // would raise its own background and end itself early.
-        sta += (energy - sta) * (dt / staSeconds).coerceAtMost(1.0)
-        if (!active) lta += (energy - lta) * (dt / ltaSeconds).coerceAtMost(1.0)
-
-        val warmedUp = (nanos - warmNanos) / 1e9 >= ltaSeconds
         val still = (nanos - movedNanos) / 1e9 >= stillSeconds
+        // Put down: the short average still holds the hand's shaking, which against
+        // the floor's background would fire the moment the phone came to rest.
+        if (still && !wasStill) sta = lta
+        wasStill = still
+
+        // Recursive averages. The short one always runs, so the screen can show the
+        // shaking in any state. The long one is the background and learns only from a
+        // phone lying still outside an event: an event would raise its own background
+        // and end itself early, and a phone being carried would teach it that walking
+        // is quiet, deafening it for minutes after it was put down.
+        sta += (energy - sta) * (dt / staSeconds).coerceAtMost(1.0)
+        if (still && !active) {
+            stillElapsed += dt
+            // A running mean until a whole time constant has been seen: from a
+            // standing start the background is right within seconds, instead of
+            // creeping up on it for half a minute while every ratio reads high.
+            lta += (energy - lta) * (dt / minOf(ltaSeconds, stillElapsed)).coerceAtMost(1.0)
+        }
+
+        val warmedUp = stillElapsed >= warmupSeconds
         val ratio = if (lta > 0) sta / lta else 0.0
 
         if (!active) {
@@ -143,7 +183,7 @@ class VibrationDetector(
 
         active = false
         val seconds = (strongNanos - startNanos) / 1e9
-        if (seconds < 0.1) return null                     // a click, not an event
+        if (seconds < minimumSeconds) return null          // a glitch, not an event
         val axis = axisEnergy.indices.maxByOrNull { axisEnergy[it] }!!
         // Two crossings a cycle, over the time between the first and the last, on the
         // axis carrying the most energy: the pitch of the shaking, not of its tail.
@@ -152,7 +192,17 @@ class VibrationDetector(
         return Event(startNanos, (seconds * 1000).toInt(), peak, ratioMax, freq)
     }
 
-    val triggered: Boolean get() = active
+    /** As of the latest sample. */
+    fun status(): Status {
+        val readiness = when {
+            lastNanos == 0L -> Readiness.WARMING_UP
+            active -> Readiness.SHAKING
+            (lastNanos - movedNanos) / 1e9 < stillSeconds -> Readiness.MOVING
+            stillElapsed < warmupSeconds -> Readiness.WARMING_UP
+            else -> Readiness.LISTENING
+        }
+        return Status(readiness, sqrt(sta), sqrt(lta), if (lta > 0) sta / lta else 0.0, triggerRatio)
+    }
 
     companion object {
         /** For the screen: a peak acceleration as a word. */
