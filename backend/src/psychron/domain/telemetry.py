@@ -190,6 +190,27 @@ class BootAnchors:
         return anchor + timedelta(milliseconds=msg.uptime_ms)
 
 
+def _clock_survives_arrival(msg, received_at: datetime) -> bool:
+    """Whether a device's own timestamp survives the only cross-check there is.
+
+    For a message sent as it was taken, arrival is a second opinion worth having:
+    the two should agree within a few minutes, and a clock that has drifted or
+    reset is caught right here.
+
+    A message the device buffered is not that case. It is old on purpose — a phone
+    off the home network queues windows for as long as it takes to find a way back,
+    then flushes hours of them in a burst — so comparing it to arrival proves only
+    that it was buffered, which the device already said. Holding it to the live
+    tolerance rejects every one of them and stacks a night of measurements onto the
+    minute they were flushed in. What arrival still rules out is a timestamp from
+    after the message left, which no clock should ever produce.
+    """
+    drift = msg.device_time - received_at
+    if msg.quality & Q_REPLAYED:
+        return drift <= CLOCK_TOLERANCE
+    return abs(drift) <= CLOCK_TOLERANCE
+
+
 def resolve_instant(msg, received_at: datetime,
                     anchors: BootAnchors) -> tuple[datetime, int]:
     """The authoritative instant for any message, and the quality that records
@@ -208,7 +229,7 @@ def resolve_instant(msg, received_at: datetime,
     quality = msg.quality
     clock_claimed = msg.device_time is not None and not (msg.quality & Q_CLOCK_UNSYNCED)
 
-    if clock_claimed and abs(msg.device_time - received_at) <= CLOCK_TOLERANCE:  # type: ignore[operator]
+    if clock_claimed and _clock_survives_arrival(msg, received_at):
         instant = msg.device_time
         anchors.observe(msg, instant)  # type: ignore[arg-type]
     else:

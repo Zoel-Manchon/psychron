@@ -95,9 +95,14 @@ Ingestion writes three columns and never collapses them:
 
 - `device_time` — what the device claimed, null if it did not know.
 - `received_at` — when the server took the message off the broker.
-- `time` — the authoritative instant, resolved as: `device_time` when the clock was
-  synced and within a tolerance of `received_at`; otherwise reconstructed from
-  `received_at` minus the transport delay implied by `up`.
+- `time` — the authoritative instant, resolved in this order: `device_time` when the
+  clock was synced and survives arrival as a cross-check; otherwise the boot anchor
+  plus `up`; otherwise `received_at`, flagged.
+
+Arrival is a cross-check, not a bound. For a message sent as it was taken the two
+should agree within five minutes, and a clock that has drifted or reset is caught
+there. A message the node marks replayed (`0x02`) is old on purpose, so the check
+is one-sided: as old as it likes, never from after it arrived.
 
 Keeping all three means the resolution can be recomputed later if the rule turns out
 to be wrong. Collapsing them at ingestion cannot be undone.

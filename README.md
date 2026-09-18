@@ -218,6 +218,8 @@ sequenceDiagram
     Note over D: the ninety-minute shape survives
 ```
 
+The phone is the other half of the same problem. It does have a clock, disciplined against NTP and carried forward on the monotonic one, so a window it buffered knows exactly when it was taken — and no anchor can be learnt for a boot that spent all of itself away from home, because no message of that boot ever arrived while it was live. Held to the rule a live message is held to, that the clock is believed when it agrees with arrival, every buffered window would be rejected for being old, which is precisely what buffering means, and a night away would land in the minute it was flushed in. So a message the node marks replayed is compared with arrival in one direction only: it may be as old as it likes, and it may not be from after it arrived.
+
 Every reading also carries a quality word, so a doubtful value is stored and marked rather than dropped:
 
 | Bit | Meaning | Set by |

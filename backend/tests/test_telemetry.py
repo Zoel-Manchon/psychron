@@ -148,6 +148,53 @@ class TestResolve:
         assert spread == timedelta(minutes=90), "the outage must keep its shape"
         assert all(r.quality & Q_TIME_FROM_ANCHOR for r in placed)
 
+    def test_a_replayed_burst_keeps_its_shape_with_no_anchor_at_all(self):
+        """The phone's case, which the anchor alone cannot cover.
+
+        The anchor is learnt from a message of that boot that arrived while the
+        device was still live. A phone that boots away from home never sends one:
+        the first message of the boot is already a replay, hours late, so there is
+        nothing to learn the anchor from. But it carries what the ESP32 cannot — a
+        timestamp from a clock the phone disciplined itself, taken at the moment of
+        measurement. Old is not the same as wrong.
+        """
+        taken = T0 - timedelta(hours=20)
+        recovery = T0
+        placed = [
+            resolve(parse(payload(ts=int((taken + timedelta(minutes=m)).timestamp()),
+                                  q=Q_REPLAYED, up=m * 60_000, seq=m)),
+                    received_at=recovery + timedelta(milliseconds=i * 40),
+                    anchors=BootAnchors())
+            for i, m in enumerate((0, 30, 90, 150))
+        ]
+
+        assert [r.time for r in placed] == [taken + timedelta(minutes=m)
+                                            for m in (0, 30, 90, 150)]
+        assert not any(r.quality & (Q_TIME_FROM_ANCHOR | Q_TIME_FROM_ARRIVAL)
+                       for r in placed), "the clock was read, not inferred"
+
+    def test_a_replayed_reading_may_not_be_stamped_after_it_arrived(self):
+        # The one thing arrival still says about a buffered message. A clock
+        # running ahead is a broken clock, replay or not.
+        msg = parse(payload(ts=int((T0 + timedelta(hours=1)).timestamp()), q=Q_REPLAYED))
+        r = resolve(msg, received_at=T0, anchors=BootAnchors())
+        assert r.time == T0
+        assert r.quality & Q_TIME_FROM_ARRIVAL
+
+    def test_a_believed_replay_anchors_the_boot_for_its_blind_siblings(self):
+        # A phone buffers from the moment it boots, so the first windows are taken
+        # before its clock syncs and carry no time of their own. The first replayed
+        # window that does carry one places them all.
+        anchors = BootAnchors()
+        taken = T0 - timedelta(hours=8)
+        synced = parse(payload(ts=int(taken.timestamp()), q=Q_REPLAYED, up=120_000))
+        resolve(synced, received_at=T0, anchors=anchors)
+
+        blind = parse(payload(ts=None, q=Q_CLOCK_UNSYNCED | Q_REPLAYED, up=20_000, seq=3))
+        r = resolve(blind, received_at=T0 + timedelta(milliseconds=50), anchors=anchors)
+        assert r.time == taken - timedelta(seconds=100)
+        assert r.quality & Q_TIME_FROM_ANCHOR
+
     def test_anchor_is_taken_from_the_first_trusted_message_only(self):
         # A later message with a slightly different clock must not drag the
         # anchor around, or replayed readings would drift as the drain proceeds.

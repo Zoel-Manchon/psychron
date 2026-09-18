@@ -6,8 +6,9 @@ a message under the wrong prefix accepted because its payload happened to parse.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from psychron.domain.telemetry import Q_REPLAYED, Q_TIME_FROM_ANCHOR, Q_TIME_FROM_ARRIVAL
 from psychron.ingest import Ingestor
 
 T0 = datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -154,3 +155,28 @@ def test_readings_and_samples_share_a_boot_anchor_table_without_colliding():
     ing.handle("psychron/v2/phone-01/sample", v2(boot=5, up=900000), T0)
     assert ing.anchors.instant_for(repo.readings[0]) == T0
     assert ing.anchors.instant_for(repo.samples[0]) == T0
+
+
+def test_a_night_buffered_on_mobile_data_arrives_at_the_times_it_was_measured():
+    """What the outbox is for, end to end, with nothing seeded.
+
+    The phone leaves the Wi-Fi, keeps measuring, and finds no way home for hours.
+    Every window waits on disk. It comes back, flushes them in a burst, and this
+    is the moment the record is either a night of measurements or a spike: the
+    ingestor has no anchor for that boot, because no message from it ever arrived
+    while the phone was live. Their own timestamps are all there is, and they are
+    enough.
+    """
+    repo = MemoryRepo()
+    ing = Ingestor(repo)
+    night = [T0 - timedelta(hours=h) for h in (8, 6, 4, 2)]
+    flush = T0
+    for i, taken in enumerate(night):
+        ing.handle("psychron/v2/phone-01/sample",
+                   v2(seq=100 + i, ts=int(taken.timestamp()), up=(8 - 2 * i) * 3_600_000,
+                      q=Q_REPLAYED, net={"via": "cell", "vpn": False}),
+                   flush + timedelta(milliseconds=i * 30))
+
+    assert [s.time for s in repo.samples] == night
+    assert all(s.quality & Q_REPLAYED for s in repo.samples), "the replay stays on the record"
+    assert not any(s.quality & (Q_TIME_FROM_ANCHOR | Q_TIME_FROM_ARRIVAL) for s in repo.samples)
