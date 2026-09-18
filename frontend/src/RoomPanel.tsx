@@ -73,7 +73,7 @@ type Props = {
 };
 
 export function RoomPanel({ current, series, stats, device, health, live, hours, from, theme, onError }: Props) {
-  const gaps = useMemo(() => (series ? findGaps(series.points, series.bucket) : []), [series]);
+  const gaps = useMemo(() => (series ? findGaps(series.points, series.bucket, series) : []), [series]);
 
   const trendPerHour = useMemo(() => {
     const pts = series?.points.filter((p) => p.temp !== null) ?? [];
@@ -156,7 +156,7 @@ export function RoomPanel({ current, series, stats, device, health, live, hours,
                  {gaps.length === 0 ? " · no gaps" : ` · ${gaps.length} gap${gaps.length > 1 ? "s" : ""}, marked on the axis`}
                </>}>
         {series
-          ? <SeriesChart points={series.points} bucket={series.bucket} panels={HISTORY} theme={theme} />
+          ? <SeriesChart points={series.points} bucket={series.bucket} panels={HISTORY} theme={theme} span={series} />
           : <p className="note">Loading the window…</p>}
 
         {/* Export belongs to the window, so it sits under the window it exports

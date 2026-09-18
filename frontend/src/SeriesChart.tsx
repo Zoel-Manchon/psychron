@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { columns, findGaps, secondsPerBucket, type Gap } from "./series";
+import { columns, findGaps, secondsPerBucket, type Gap, type Span } from "./series";
 
 // Every chart on the panel: the room's temperature and humidity, and each of the
 // phone's quantities.
@@ -37,6 +37,9 @@ type Props = {
   bucket: string;
   panels: ChartPanel[];
   theme?: string;
+  /** The window that was asked for. Given it, the plots span it, and the stretch
+   *  before the first reading is drawn as the outage it is rather than cropped. */
+  span?: Span;
 };
 
 /** A colour from the page's palette. Read when a chart is built, which is why every
@@ -165,14 +168,14 @@ const lastOf = (col: (number | null)[]) => {
   return null;
 };
 
-export function SeriesChart({ points, bucket, panels, theme }: Props) {
+export function SeriesChart({ points, bucket, panels, theme, span }: Props) {
   const sync = useId();
   const [idx, setIdx] = useState<number | null>(null);
   const onCursor = useCallback((i: number | null) => setIdx(i), []);
 
   const keys = useMemo(() => panels.flatMap((p) => p.traces.map((t) => t.key)), [panels]);
-  const table = useMemo(() => columns(points, bucket, keys), [points, bucket, keys]);
-  const gaps = useMemo(() => findGaps(points, bucket), [points, bucket]);
+  const table = useMemo(() => columns(points, bucket, keys, span), [points, bucket, keys, span]);
+  const gaps = useMemo(() => findGaps(points, bucket, span), [points, bucket, span]);
   const xs = table[0];
   const byKey = useMemo(() => new Map(keys.map((k, i) => [k, table[i + 1]])), [keys, table]);
   const panelData = useMemo(

@@ -132,7 +132,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
   }, [hours]);
 
   const points = useMemo(() => series?.points ?? [], [series]);
-  const gaps = useMemo(() => (series ? findGaps(series.points, series.bucket) : []), [series]);
+  const gaps = useMemo(() => (series ? findGaps(series.points, series.bucket, series) : []), [series]);
   const cover = useMemo(() => coverage(points), [points]);
   const dominant = dominantBand(cover);
 
@@ -247,13 +247,13 @@ export function PhonePanel({ from, hours, theme }: Props) {
 
         {hasPoints && (
           <div className="grid4">
-            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[0]} theme={theme} /></div>
+            <div className="span2"><SeriesChart points={points} bucket={bucket} span={series ?? undefined} panels={ENVIRONMENT[0]} theme={theme} /></div>
             <div className="span2">
-              <SeriesChart points={heightPoints} bucket={bucket} panels={ENVIRONMENT[1]} theme={theme} />
+              <SeriesChart points={heightPoints} bucket={bucket} span={series ?? undefined} panels={ENVIRONMENT[1]} theme={theme} />
               <p className="note figure-foot">Since the start of the window. A storey is about 3 m; over hours this is weather, not height.</p>
             </div>
-            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[2]} theme={theme} /></div>
-            <div className="span2"><SeriesChart points={points} bucket={bucket} panels={ENVIRONMENT[3]} theme={theme} /></div>
+            <div className="span2"><SeriesChart points={points} bucket={bucket} span={series ?? undefined} panels={ENVIRONMENT[2]} theme={theme} /></div>
+            <div className="span2"><SeriesChart points={points} bucket={bucket} span={series ?? undefined} panels={ENVIRONMENT[3]} theme={theme} /></div>
           </div>
         )}
       </Section>
@@ -295,7 +295,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
 
         <div className="grid4">
           <div className="span2">
-            {hasPoints ? <SeriesChart points={points} bucket={bucket} panels={MOTION} theme={theme} />
+            {hasPoints ? <SeriesChart points={points} bucket={bucket} span={series ?? undefined} panels={MOTION} theme={theme} />
               : <p className="note">No windows in this range.</p>}
           </div>
           <Panel label="Vibration events" span={2} aside={events.length > 10 ? `latest 10 of ${events.length}` : undefined}>
@@ -372,7 +372,7 @@ export function PhonePanel({ from, hours, theme }: Props) {
             <Track points={points} accuracy={fix?.loc_acc_m ?? null} />
           </Panel>
           <div className="span2">
-            {hasPoints ? <SeriesChart points={points} bucket={bucket} panels={RADIO} theme={theme} />
+            {hasPoints ? <SeriesChart points={points} bucket={bucket} span={series ?? undefined} panels={RADIO} theme={theme} />
               : <p className="note">No windows in this range.</p>}
           </div>
         </div>

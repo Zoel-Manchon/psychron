@@ -402,19 +402,36 @@ class ReadQueries:
 
             # Gaps are found from the data rather than reported by the device,
             # because a node that dies cannot tell anyone it died.
+            #
+            # The day's own edges count. A gap between two readings needs two
+            # readings, so a node that was already down when the window opened
+            # leaves nothing for `lag` to subtract from and its outage goes
+            # unreported — while the completeness figure beside it says three per
+            # cent. Those are two halves of one contradiction, and the half that
+            # was missing is usually the larger outage.
             cur.execute(
                 """
-                SELECT prev_time AS gap_start, time AS gap_end,
+                WITH span AS (SELECT now() - interval '24 hours' AS opened, now() AS closed),
+                     seen AS (
+                         SELECT time FROM reading, span
+                         WHERE device_id = %s AND time > span.opened
+                     ),
+                     edges AS (
+                         SELECT lag(time) OVER (ORDER BY time) AS gap_start, time AS gap_end
+                         FROM seen
+                         UNION ALL
+                         SELECT (SELECT opened FROM span), (SELECT min(time) FROM seen)
+                         UNION ALL
+                         SELECT (SELECT max(time) FROM seen), (SELECT closed FROM span)
+                     )
+                SELECT gap_start, gap_end,
                        -- Cast to float8: EXTRACT yields numeric, which has no JSON
                        -- representation and reaches the client quoted as a string.
-                       EXTRACT(EPOCH FROM time - prev_time)::float8 AS seconds
-                FROM (
-                    SELECT time, lag(time) OVER (ORDER BY time) AS prev_time
-                    FROM reading
-                    WHERE device_id = %s AND time > now() - interval '24 hours'
-                ) s
-                WHERE prev_time IS NOT NULL AND time - prev_time > interval '30 seconds'
-                ORDER BY time DESC LIMIT 20
+                       EXTRACT(EPOCH FROM gap_end - gap_start)::float8 AS seconds
+                FROM edges
+                WHERE gap_start IS NOT NULL AND gap_end IS NOT NULL
+                  AND gap_end - gap_start > interval '30 seconds'
+                ORDER BY gap_end DESC LIMIT 20
                 """,
                 (device_id,),
             )
