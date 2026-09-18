@@ -90,9 +90,15 @@ rule "Phone node"
 if [ -n "${JAVA_HOME:-}" ] && { [ -n "${ANDROID_HOME:-}" ] || [ -f android/local.properties ]; }; then
   gradlew=./gradlew
   [ -f android/gradlew.bat ] && [ -n "${WINDIR:-}" ] && gradlew=./gradlew.bat
-  if (cd android && $gradlew testDebugUnitTest --console=plain -q >/dev/null 2>&1); then
+  out=$(cd android && $gradlew testDebugUnitTest --console=plain -q 2>&1)
+  if [ $? -eq 0 ]; then
     n=$(grep -ho 'tests="[0-9]*"' android/app/build/test-results/testDebugUnitTest/*.xml | tr -dc '0-9\n' | awk '{ s += $1 } END { print s }')
     ok "${n:+$n tests: }contract, readouts, vibration trigger, A-weighting, SNTP, signing request"
+  # A toolchain that will not start is not a test that failed, and printing it
+  # as one teaches whoever runs this to ignore a red line. The Android plugin
+  # rejects a JDK newer than it knows by printing the version and nothing else.
+  elif printf "%s" "$out" | grep -qiE "unsupported class file|no longer supports|^[0-9]+\.[0-9.]+$"; then
+    meh "the JDK in JAVA_HOME is newer than the Android plugin accepts — set org.gradle.java.home to a JDK 17-21"
   else
     no "phone node unit tests"
   fi
