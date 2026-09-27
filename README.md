@@ -310,7 +310,7 @@ Requires Docker, and a `secrets.h` for the firmware.
 
 ```bash
 cd infra
-./bootstrap.sh                # writes .env with a fresh database password
+./bootstrap.sh                # writes .env: database password, API token
 ./make-certs.sh               # private CA and the six certificates
 docker compose up -d          # db, broker, ingest, api, web, fwserver
 ./check-mtls.sh               # assert the transport is what it claims
@@ -322,6 +322,11 @@ certificate's `subjectAltName`, and a name that is not in there fails hostname
 verification with an error that points at the certificate rather than at the
 missing name. For a phone node on mobile data, add `PSYCHRON_MQTT_REMOTE_HOST`
 and re-run it: see [docs/REMOTE-NODES.md](docs/REMOTE-NODES.md).
+
+On Linux, and with the repository inside WSL, install `acl` first
+(`sudo apt install acl`). The broker, ingestion and the API run as their own
+users, and `bootstrap.sh` and `make-certs.sh` grant each of them read access to
+the files it loads and nothing else.
 
 Caddy serves the panel from `frontend/dist`, which is a build output and is not
 in the repository, so build it once:
