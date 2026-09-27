@@ -233,6 +233,31 @@ ensure_ca_database
 openssl ca -config "$CERTS/ca.cnf" -gencrl -out "$CERTS/crl.pem" 2>/dev/null
 echo "  revocation list: $(openssl crl -in "$CERTS/crl.pem" -noout -text | grep -c 'Serial Number') revoked"
 
+# The services do not run as whoever owns these files: mosquitto drops to uid
+# 1883, and ingestion runs as uid 10001 (backend/Dockerfile). Where the bind mount
+# keeps Linux permissions — Docker Engine, or Docker Desktop with the repository
+# inside WSL — the 700 on this directory and the 640 on the keys shut both out,
+# and the broker restarts in a loop on "Unable to load CA certificates". A mount
+# of a Windows path ignores permissions, which is why Git Bash never showed it.
+#
+# An ACL gives each service the files it loads and nothing else: no service can
+# read the CA key or another's client key, and no key becomes world readable.
+# Applied on every run, because the chmod above clears the ACL mask each time.
+grant() {
+  local uid="$1" f
+  shift
+  setfacl -m "u:$uid:rx" "$CERTS"
+  for f in "$@"; do setfacl -m "u:$uid:r" "$CERTS/$f"; done
+}
+if command -v setfacl >/dev/null 2>&1; then
+  grant 1883 ca.crt broker.crt broker.key crl.pem
+  grant 10001 ca.crt ingest.crt ingest.key
+  echo "  read access for the broker (uid 1883) and ingestion (uid 10001)"
+elif [ "$(uname -s)" = Linux ]; then
+  echo "  NOTE: setfacl is missing, so the broker and ingestion containers cannot" >&2
+  echo "        read these files. Install it (sudo apt install acl) and re-run." >&2
+fi
+
 echo
 echo "Certificates in infra/certs (gitignored). The private keys never leave it."
 openssl x509 -in "$CERTS/broker.crt" -noout -subject -dates -ext subjectAltName | sed 's/^/  /'

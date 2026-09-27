@@ -323,6 +323,11 @@ verification with an error that points at the certificate rather than at the
 missing name. For a phone node on mobile data, add `PSYCHRON_MQTT_REMOTE_HOST`
 and re-run it: see [docs/REMOTE-NODES.md](docs/REMOTE-NODES.md).
 
+On Linux, and with the repository inside WSL, install `acl` first
+(`sudo apt install acl`). The broker and ingestion run as their own users, and
+`make-certs.sh` grants each of them read access to the certificates it loads and
+nothing else.
+
 Caddy serves the panel from `frontend/dist`, which is a build output and is not
 in the repository, so build it once:
 
